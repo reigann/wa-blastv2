@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Build outputs
+dist/
+build/
+.vite
+
+# Database
+db/blaster.db
+db/*.sqlite
+db/*.sqlite3
+
+# WhatsApp session
+.wwebjs_auth/
+.wwebjs_cookie
+
+# Uploads
+uploads/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+logs/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
