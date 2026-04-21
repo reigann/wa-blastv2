@@ -1,9 +1,10 @@
 import { Link, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Users, Send, FileText, ScrollText, BarChart3 } from 'lucide-react';
+import { LayoutDashboard, Users, Send, FileText, ScrollText, BarChart3, Layers } from 'lucide-react';
 
 const menu = [
   { path: '/',           label: 'Dashboard', icon: LayoutDashboard },
   { path: '/contacts',   label: 'Contacts',  icon: Users },
+  { path: '/clustering', label: 'Clustering', icon: Layers },
   { path: '/blast',      label: 'Blast',     icon: Send },
   { path: '/sessions',   label: 'Sessions',  icon: BarChart3 },
   { path: '/templates',  label: 'Templates', icon: FileText },

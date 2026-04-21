@@ -7,10 +7,11 @@ import Blast from './pages/Blast';
 import Templates from './pages/Templates';
 import Logs from './pages/Logs';
 import Sessions from './pages/Sessions';
+import Clustering from './pages/Clustering';
 
 export default function App() {
   return (
-    <BrowserRouter>
+    <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <Toaster 
         position="top-right"
         toastOptions={{
@@ -34,6 +35,7 @@ export default function App() {
             <Route path="/templates" element={<Templates />} />
             <Route path="/sessions" element={<Sessions />} />
             <Route path="/logs" element={<Logs />} />
+            <Route path="/clustering" element={<Clustering />} />
           </Routes>
         </main>
       </div>

@@ -7,9 +7,49 @@ let client = null;
 let clientStatus = 'disconnected'; // disconnected | qr | connecting | connected
 let currentQR = null;
 let io = null;
+let reconnectTimer = null;
+let isInitializing = false;
 
-function initWhatsApp(socketIo) {
+function emitStatus() {
+  if (io) {
+    io.emit('wa:status', clientStatus);
+  }
+}
+
+function scheduleReconnect(delay = 5000) {
+  if (!io) return;
+  if (reconnectTimer) return;
+
+  reconnectTimer = setTimeout(async () => {
+    reconnectTimer = null;
+    await initWhatsApp(io);
+  }, delay);
+}
+
+async function cleanupClient() {
+  if (!client) return;
+
+  try {
+    await client.destroy();
+  } catch (err) {
+    console.error('Failed to destroy WhatsApp client:', err.message);
+  }
+
+  client = null;
+}
+
+async function initWhatsApp(socketIo) {
   io = socketIo;
+
+  if (isInitializing) {
+    return;
+  }
+
+  isInitializing = true;
+
+  await cleanupClient();
+  clientStatus = 'connecting';
+  emitStatus();
 
   client = new Client({
     authStrategy: new LocalAuth({ clientId: 'wa-blaster' }),
@@ -32,12 +72,12 @@ function initWhatsApp(socketIo) {
     clientStatus = 'qr';
     currentQR = await qrcode.toDataURL(qr);
     io.emit('wa:qr', currentQR);
-    io.emit('wa:status', clientStatus);
+    emitStatus();
   });
 
   client.on('loading_screen', (percent, message) => {
     clientStatus = 'connecting';
-    io.emit('wa:status', clientStatus);
+    emitStatus();
     io.emit('wa:loading', { percent, message });
   });
 
@@ -45,27 +85,82 @@ function initWhatsApp(socketIo) {
     console.log('AUTHENTICATED');
     clientStatus = 'connecting';
     currentQR = null;
-    io.emit('wa:status', clientStatus);
+    emitStatus();
   });
 
   client.on('ready', () => {
     console.log('CLIENT IS READY');
     clientStatus = 'connected';
     currentQR = null;
-    io.emit('wa:status', clientStatus);
+    emitStatus();
     io.emit('wa:ready', { message: 'WhatsApp connected successfully!' });
+  });
+
+  // Prevent EventEmitter "Unhandled 'error' event" crashes from whatsapp-web.js/puppeteer internals.
+  client.on('error', (err) => {
+    console.error('WhatsApp client error:', err?.message || err);
+    clientStatus = 'disconnected';
+    emitStatus();
+    scheduleReconnect(3000);
+  });
+
+  client.on('auth_failure', (message) => {
+    console.error('AUTH FAILURE:', message);
+    clientStatus = 'disconnected';
+    currentQR = null;
+    emitStatus();
+    scheduleReconnect(5000);
   });
 
   client.on('disconnected', (reason) => {
     console.log('CLIENT DISCONNECTED', reason);
     clientStatus = 'disconnected';
-    io.emit('wa:status', clientStatus);
+    emitStatus();
     io.emit('wa:disconnected', { reason });
-    // Reinitialize after disconnect
-    setTimeout(() => initWhatsApp(io), 5000);
+    scheduleReconnect(5000);
   });
 
-  client.initialize();
+  try {
+    // Suppress Puppeteer execution context errors during initialization
+    const originalConsoleError = console.error;
+    let suppressNextError = false;
+    
+    console.error = function(...args) {
+      const message = args[0]?.toString?.() || String(args[0]);
+      if (message.includes('Execution context was destroyed') || 
+          message.includes('Target closed') ||
+          message.includes('Session closed')) {
+        suppressNextError = true;
+        return; // Don't log these known navigation errors
+      }
+      originalConsoleError.apply(console, args);
+    };
+
+    await client.initialize();
+    
+    // Restore console.error
+    console.error = originalConsoleError;
+  } catch (err) {
+    const message = err?.message || String(err);
+    
+    // Suppress known non-fatal puppeteer errors
+    if (message.includes('Execution context was destroyed') || 
+        message.includes('Target closed') ||
+        message.includes('Session closed') ||
+        message.includes('Navigation failed')) {
+      console.warn('[PUPPETEER] Non-fatal navigation error (ignored):', message);
+      clientStatus = 'connecting'; // Stay in connecting state, will retry
+      // Don't schedule immediate reconnect for these transient errors
+      return;
+    }
+    
+    console.error('Failed to initialize WhatsApp client:', message);
+    clientStatus = 'disconnected';
+    emitStatus();
+    scheduleReconnect(5000);
+  } finally {
+    isInitializing = false;
+  }
 }
 
 function getClient() {
@@ -137,7 +232,7 @@ async function logout() {
   if (client) {
     await client.logout();
     clientStatus = 'disconnected';
-    io.emit('wa:status', clientStatus);
+    emitStatus();
   }
 }
 

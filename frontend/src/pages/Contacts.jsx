@@ -39,6 +39,19 @@ export default function Contacts() {
     loadContacts(); loadGroups();
   }
 
+  async function deleteAllContacts() {
+    if (!window.confirm(`⚠️ Hapus semua ${contacts.length} kontak di grup "${selectedGroup || 'semua'}"? Ini tidak bisa dibatalkan!`)) {
+      return;
+    }
+    try {
+      await contactsAPI.deleteAll(selectedGroup || undefined);
+      toast.success(`✅ Semua kontak terhapus`);
+      loadContacts(); loadGroups();
+    } catch (err) {
+      toast.error('Gagal hapus kontak');
+    }
+  }
+
   function handleCSVUpload(e) {
     const file = e.target.files[0];
     if (!file) return;
@@ -73,6 +86,12 @@ export default function Contacts() {
             className="flex items-center gap-2 px-4 py-2 bg-green-500 text-white rounded-lg text-sm hover:bg-green-600">
             <Plus size={16} /> Add Contact
           </button>
+          {contacts.length > 0 && (
+            <button onClick={deleteAllContacts}
+              className="flex items-center gap-2 px-4 py-2 bg-red-500 text-white rounded-lg text-sm hover:bg-red-600">
+              <Trash2 size={16} /> Hapus Semua
+            </button>
+          )}
         </div>
       </div>
 

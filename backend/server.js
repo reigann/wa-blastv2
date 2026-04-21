@@ -12,6 +12,7 @@ const authRoutes = require('./routes/auth');
 const contactRoutes = require('./routes/contacts');
 const blastRoutes = require('./routes/blast');
 const templateRoutes = require('./routes/templates');
+const clusteringRoutes = require('./routes/clustering');
 
 const app = express();
 const httpServer = http.createServer(app);
@@ -32,6 +33,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/contacts', contactRoutes);
 app.use('/api/blast', blastRoutes);
 app.use('/api/templates', templateRoutes);
+app.use('/api/clustering', clusteringRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => res.json({ ok: true }));
