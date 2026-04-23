@@ -185,12 +185,23 @@ async function sendMessage(phone, message) {
   }
   const chatId = `${formatted}@c.us`;
 
-  // Check if number exists on WhatsApp
-  const isRegistered = await client.isRegisteredUser(chatId);
-  if (!isRegistered) {
-    throw new Error(`Number ${phone} is not registered on WhatsApp`);
+  try {
+    // Check if number exists on WhatsApp (with timeout)
+    const checkPromise = client.isRegisteredUser(chatId);
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('Registration check timeout')), 15000)
+    );
+    
+    const isRegistered = await Promise.race([checkPromise, timeoutPromise]);
+    if (!isRegistered) {
+      throw new Error(`Number ${phone} is not registered on WhatsApp`);
+    }
+  } catch (err) {
+    // If registration check fails/times out, try sending anyway (WhatsApp will error if truly invalid)
+    console.warn(`Registration check warning for ${phone}:`, err.message);
   }
 
+  // Send message
   await client.sendMessage(chatId, message);
   return true;
 }
@@ -209,10 +220,20 @@ async function sendMessageWithMedia(phone, message, mediaPath) {
   }
   const chatId = `${formatted}@c.us`;
 
-  // Check if number exists on WhatsApp
-  const isRegistered = await client.isRegisteredUser(chatId);
-  if (!isRegistered) {
-    throw new Error(`Number ${phone} is not registered on WhatsApp`);
+  try {
+    // Check if number exists on WhatsApp (with timeout)
+    const checkPromise = client.isRegisteredUser(chatId);
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('Registration check timeout')), 15000)
+    );
+    
+    const isRegistered = await Promise.race([checkPromise, timeoutPromise]);
+    if (!isRegistered) {
+      throw new Error(`Number ${phone} is not registered on WhatsApp`);
+    }
+  } catch (err) {
+    // If registration check fails/times out, try sending anyway (WhatsApp will error if truly invalid)
+    console.warn(`Registration check warning for ${phone}:`, err.message);
   }
 
   // Load media dari file atau URL

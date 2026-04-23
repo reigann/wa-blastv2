@@ -1,11 +1,61 @@
 const { spawn } = require('child_process');
 const path = require('path');
 const db = require('../db/database');
+const os = require('os');
 
 class ClusteringServiceWrapper {
   constructor() {
-    // Use Python from venv
-    this.pythonPath = path.join(__dirname, '../../.venv/Scripts/python.exe');
+    // Try multiple paths for Python
+    this.pythonPath = this.findPython();
+    if (!this.pythonPath) {
+      console.warn('⚠️  Python not found - Clustering features will be disabled');
+    } else {
+      console.log(`✅ Using Python: ${this.pythonPath}`);
+    }
+  }
+
+  /**
+   * Find Python executable in various locations
+   */
+  findPython() {
+    const candidates = [];
+    
+    // Windows paths
+    if (os.platform() === 'win32') {
+      candidates.push(
+        path.join(__dirname, '../../.venv/Scripts/python.exe'),
+        'python.exe',
+        'python3.exe',
+        'py.exe'
+      );
+    } else {
+      // Unix/Linux/Mac paths
+      candidates.push(
+        path.join(__dirname, '../../.venv/bin/python'),
+        path.join(__dirname, '../../.venv/bin/python3'),
+        'python',
+        'python3'
+      );
+    }
+
+    // Try each candidate
+    for (const python of candidates) {
+      try {
+        // For global commands, we can't check if exists easily, so just return them
+        if (python === 'python.exe' || python === 'python3.exe' || python === 'python' || python === 'python3' || python === 'py.exe') {
+          return python;
+        }
+        // For full paths, verify they exist
+        const fs = require('fs');
+        if (fs.existsSync(python)) {
+          return python;
+        }
+      } catch (err) {
+        // Continue to next candidate
+      }
+    }
+
+    return null;
   }
 
   /**
@@ -14,6 +64,11 @@ class ClusteringServiceWrapper {
   async runClustering(contacts, nClusters = null) {
     return new Promise((resolve, reject) => {
       try {
+        // Check if Python is available
+        if (!this.pythonPath) {
+          return reject(new Error('Python is not installed or not found in PATH. Clustering feature is unavailable.'));
+        }
+
         // Prepare data
         const contactData = contacts.map(c => ({
           id: c.id,
@@ -32,7 +87,8 @@ class ClusteringServiceWrapper {
 
         // Spawn Python process
         const python = spawn(this.pythonPath, args, {
-          maxBuffer: 10 * 1024 * 1024 // 10MB buffer
+          maxBuffer: 10 * 1024 * 1024, // 10MB buffer
+          timeout: 60000 // 60 second timeout
         });
 
         let output = '';
@@ -46,18 +102,32 @@ class ClusteringServiceWrapper {
           error += data.toString();
         });
 
+        python.on('error', (err) => {
+          // Handle spawn errors (e.g., Python not found)
+          reject(new Error(`Failed to spawn Python process: ${err.message}`));
+        });
+
         python.on('close', (code) => {
           if (code !== 0) {
-            return reject(new Error(`Python script failed: ${error}`));
+            // Return more detailed error message
+            const errorMsg = error || `Python script exited with code ${code}`;
+            console.error('❌ Python script error:', errorMsg);
+            return reject(new Error(`Clustering failed: ${errorMsg}`));
           }
 
           try {
+            if (!output.trim()) {
+              return reject(new Error('Python script produced no output'));
+            }
             const result = JSON.parse(output);
             if (!result.success) {
-              return reject(new Error(result.error));
+              console.error('❌ Python script returned error:', result.error);
+              return reject(new Error(result.error || 'Unknown clustering error'));
             }
+            console.log('✅ Python clustering completed successfully');
             resolve(result);
           } catch (e) {
+            console.error('❌ Failed to parse Python output:', output);
             reject(new Error(`Failed to parse Python output: ${e.message}`));
           }
         });
@@ -73,6 +143,15 @@ class ClusteringServiceWrapper {
    */
   async saveClusteringResults(clusterName, result, contactIds) {
     try {
+      // Validate result object
+      if (!result || !result.labels || !Array.isArray(result.labels)) {
+        throw new Error(`Invalid clustering result: missing or invalid labels array. Got: ${JSON.stringify(result).substring(0, 200)}`);
+      }
+
+      if (result.labels.length !== contactIds.length) {
+        throw new Error(`Labels count (${result.labels.length}) doesn't match contacts count (${contactIds.length})`);
+      }
+
       // Insert cluster metadata
       const metadataStmt = db.prepare(`
         INSERT INTO cluster_metadata (name, total_contacts, num_clusters, silhouette_score, davies_bouldin_index, features_used, created_at, updated_at)
@@ -82,11 +161,13 @@ class ClusteringServiceWrapper {
       const clusterId = metadataStmt.run(
         clusterName,
         contactIds.length,
-        result.n_clusters,
-        result.silhouette_score,
-        result.davies_bouldin_index,
-        JSON.stringify(result.features_used)
+        result.n_clusters || 3,
+        result.silhouette_score || 0,
+        result.davies_bouldin_index || 0,
+        JSON.stringify(result.features_used || [])
       ).lastInsertRowid;
+
+      console.log(`✅ Saved cluster metadata with ID: ${clusterId}`);
 
       // Update contacts with cluster assignments
       const updateContactStmt = db.prepare(`
@@ -95,27 +176,24 @@ class ClusteringServiceWrapper {
 
       const transaction = db.transaction(() => {
         for (let i = 0; i < contactIds.length; i++) {
-          updateContactStmt.run(result.labels[i], contactIds[i]);
+          const clusterId = result.labels[i];
+          const contactId = contactIds[i];
+          updateContactStmt.run(clusterId, contactId);
         }
       });
 
       transaction();
-
-      // Save features
-      const featureStmt = db.prepare(`
-        INSERT INTO features (contact_id, feature_name, feature_value)
-        VALUES (?, ?, ?)
-        ON CONFLICT(contact_id, feature_name) DO UPDATE SET feature_value = excluded.feature_value
-      `);
+      console.log(`✅ Updated ${contactIds.length} contacts with cluster assignments`);
 
       return {
         success: true,
         clusterId,
-        message: `Clustering berhasil disimpan dengan ${result.n_clusters} cluster`
+        message: `Clustering berhasil disimpan dengan ${result.n_clusters || 3} cluster`
       };
 
     } catch (err) {
-      throw new Error(`Failed to save clustering results: ${err.message}`);
+      console.error('❌ Failed to save clustering results:', err.message);
+      throw err;
     }
   }
 

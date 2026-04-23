@@ -49,7 +49,9 @@ const Clustering = () => {
         fetchLatestClustering();
       }
     } catch (error) {
-      toast.error(error.response?.data?.error || 'Error running clustering');
+      const errorMsg = error.response?.data?.error || error.message || 'Error running clustering';
+      console.error('Clustering error:', error.response?.data);
+      toast.error(errorMsg);
     } finally {
       setIsLoading(false);
     }

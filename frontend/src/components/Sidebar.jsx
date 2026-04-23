@@ -1,5 +1,8 @@
+import { useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Users, Send, FileText, ScrollText, BarChart3, Layers } from 'lucide-react';
+import { LayoutDashboard, Users, Send, FileText, ScrollText, BarChart3, Layers, LogOut } from 'lucide-react';
+import { authAPI } from '../services/api';
+import toast from 'react-hot-toast';
 
 const menu = [
   { path: '/',           label: 'Dashboard', icon: LayoutDashboard },
@@ -13,6 +16,24 @@ const menu = [
 
 export default function Sidebar() {
   const { pathname } = useLocation();
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
+
+  async function handleLogout() {
+    if (!confirm('Disconnect WhatsApp? You will need to scan the QR code again to reconnect.')) {
+      return;
+    }
+
+    setIsLoggingOut(true);
+    try {
+      await authAPI.logout();
+      toast.success('WhatsApp disconnected successfully!');
+    } catch (error) {
+      console.error('Logout failed:', error);
+      toast.error('Failed to disconnect WhatsApp');
+    } finally {
+      setIsLoggingOut(false);
+    }
+  }
   return (
     <aside className="w-64 bg-gradient-to-b from-slate-900 to-slate-800 h-screen flex flex-col shrink-0 shadow-2xl">
       {/* Header */}
@@ -51,11 +72,19 @@ export default function Sidebar() {
       </nav>
 
       {/* Footer */}
-      <div className="p-4 border-t border-slate-700">
+      <div className="p-4 border-t border-slate-700 space-y-3">
         <div className="bg-slate-700/50 rounded-lg p-3 text-center">
           <p className="text-xs text-slate-300">v1.0.0</p>
           <p className="text-slate-400 text-xs mt-1">Connected & Ready</p>
         </div>
+        <button
+          onClick={handleLogout}
+          disabled={isLoggingOut}
+          className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 hover:border-red-500/50 text-red-400 hover:text-red-300 rounded-lg transition-all duration-200 font-medium text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          <LogOut size={18} />
+          <span>{isLoggingOut ? 'Disconnecting...' : 'Logout WA'}</span>
+        </button>
       </div>
     </aside>
   );

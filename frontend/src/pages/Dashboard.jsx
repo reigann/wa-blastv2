@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
-import { blastAPI, contactsAPI } from '../services/api';
+import { blastAPI, contactsAPI, authAPI } from '../services/api';
 import { StatusBadge } from '../components/StatusBadge';
 import { QRModal } from '../components/QRModal';
 import { useSocket } from '../hooks/useSocket';
+import toast from 'react-hot-toast';
 import {
   Users, Send, CheckCircle, XCircle, TrendingUp, Activity,
   Calendar, Zap, Target, Globe, Clock, AlertCircle, BarChart3,
-  PieChart as PieIcon
+  PieChart as PieIcon, LogOut
 } from 'lucide-react';
 import {
   LineChart, Line, BarChart, Bar, PieChart, Pie, Cell,
@@ -28,6 +29,24 @@ export default function Dashboard() {
   const [clusterData, setClusterData] = useState([]);
   const [successRate, setSuccessRate] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
+
+  async function handleLogout() {
+    if (!confirm('Disconnect WhatsApp? You will need to scan the QR code again to reconnect.')) {
+      return;
+    }
+
+    setIsLoggingOut(true);
+    try {
+      await authAPI.logout();
+      toast.success('WhatsApp disconnected successfully!');
+    } catch (error) {
+      console.error('Logout failed:', error);
+      toast.error('Failed to disconnect WhatsApp');
+    } finally {
+      setIsLoggingOut(false);
+    }
+  }
 
   useEffect(() => {
     loadStats();
@@ -133,9 +152,19 @@ export default function Dashboard() {
                 <span>Real-time WhatsApp Analytics</span>
               </p>
             </div>
-            <div className="flex items-center gap-3 bg-gray-800/50 px-3 sm:px-4 py-2 sm:py-3 rounded-xl border border-gray-700 text-sm">
+            <div className="flex items-center gap-2 sm:gap-3 bg-gray-800/50 px-3 sm:px-4 py-2 sm:py-3 rounded-xl border border-gray-700 text-sm">
               <Activity size={16} className="text-green-400 animate-pulse" />
               <StatusBadge status={waStatus} />
+              {waStatus === 'connected' && (
+                <button
+                  onClick={handleLogout}
+                  disabled={isLoggingOut}
+                  className="ml-2 p-1.5 hover:bg-red-500/20 border border-red-500/30 hover:border-red-500/50 text-red-400 hover:text-red-300 rounded-lg transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="Disconnect WhatsApp"
+                >
+                  <LogOut size={16} />
+                </button>
+              )}
             </div>
           </div>
         </div>

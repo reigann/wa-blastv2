@@ -9,6 +9,13 @@ const db = require('../db/database');
  */
 router.post('/run', async (req, res) => {
   try {
+    // Check if Python is available
+    if (!clusteringService.pythonPath) {
+      return res.status(503).json({
+        error: 'Clustering service unavailable: Python is not installed or not found in PATH. Please install Python or run: npm run setup-python'
+      });
+    }
+
     const { groupName = null, nClusters = null } = req.body;
 
     // Get contacts to cluster
@@ -22,6 +29,8 @@ router.post('/run', async (req, res) => {
 
     const contacts = db.prepare(query).all(...params);
 
+    console.log(`📊 Starting clustering with ${contacts.length} contacts, nClusters=${nClusters}`);
+
     if (contacts.length < 2) {
       return res.status(400).json({
         error: 'Minimal 2 kontak diperlukan untuk clustering'
@@ -32,8 +41,11 @@ router.post('/run', async (req, res) => {
     const timestamp = new Date().toISOString().slice(0, 10);
     const clusterName = `Clustering_${groupName || 'all'}_${timestamp}`;
 
+    // Parse nClusters as integer
+    const parsedNClusters = nClusters ? parseInt(nClusters) : null;
+
     // Run clustering
-    const result = await clusteringService.runClustering(contacts, nClusters);
+    const result = await clusteringService.runClustering(contacts, parsedNClusters);
 
     // Save results
     const contactIds = contacts.map(c => c.id);
@@ -53,8 +65,12 @@ router.post('/run', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Clustering error:', error);
-    res.status(500).json({ error: error.message });
+    console.error('❌ Clustering error:', error);
+    console.error('Stack:', error.stack);
+    res.status(500).json({ 
+      error: error.message,
+      details: error.stack
+    });
   }
 });
 
@@ -166,6 +182,32 @@ router.get('/contacts-by-cluster/:clusterId', (req, res) => {
 
     res.json({ clusterId, count: contacts.length, contacts });
 
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /api/clustering/debug
+ * Debug clustering service
+ */
+router.get('/debug', (req, res) => {
+  try {
+    const contactCount = db.prepare('SELECT COUNT(*) as count FROM contacts').get().count;
+    const clusterCount = db.prepare('SELECT COUNT(*) as count FROM cluster_metadata').get().count;
+    
+    res.json({
+      pythonAvailable: !!clusteringService.pythonPath,
+      pythonPath: clusteringService.pythonPath || 'not found',
+      totalContacts: contactCount,
+      clusteringMetadataRecords: clusterCount,
+      tables: {
+        contacts: true,
+        cluster_metadata: true,
+        features: true
+      },
+      status: 'OK'
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

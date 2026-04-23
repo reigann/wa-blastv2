@@ -88,6 +88,32 @@ npm install
 
 Wait for installation (~2-3 minutes).
 
+### Step 5.5: Setup Python for Clustering (Optional)
+
+The clustering feature requires Python. You can skip this if you don't need clustering functionality.
+
+**Option A: Automatic Setup (Recommended)**
+```cmd
+cd backend
+npm run setup-python
+```
+
+**Option B: Manual Setup**
+
+1. Install Python from [python.org](https://www.python.org/downloads/) (3.8+)
+2. Open Command Prompt in backend folder:
+```cmd
+cd backend
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install scikit-learn pandas numpy
+```
+
+Verify:
+```cmd
+python -c "import sklearn, pandas, numpy; print('✅ OK')"
+```
+
 ### Step 6: Verify Configuration
 
 Check `.env` file in backend folder:

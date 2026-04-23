@@ -136,9 +136,20 @@ export default function Blast() {
             ✅ {blastProgress.sent} sent &nbsp; ❌ {blastProgress.failed} failed
           </p>
           {blastProgress.phone && (
-            <p className="text-xs text-blue-500 mt-1">
-              Last: {blastProgress.name || blastProgress.phone} — {blastProgress.status}
-            </p>
+            <div className="text-xs text-blue-500 mt-1 space-y-1">
+              <p>
+                Last: {blastProgress.name || blastProgress.phone} — 
+                <span className={blastProgress.status === 'sent' ? 'text-green-600' : 'text-red-600'}>
+                  {blastProgress.status}
+                </span>
+              </p>
+              {blastProgress.error && (
+                <p className="text-red-500">Error: {blastProgress.error}</p>
+              )}
+              {blastProgress.retry > 0 && (
+                <p className="text-yellow-600">Retry attempt: {blastProgress.retry}</p>
+              )}
+            </div>
           )}
         </div>
       )}
