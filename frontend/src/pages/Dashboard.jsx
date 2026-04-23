@@ -104,7 +104,7 @@ export default function Dashboard() {
     <div className="group bg-white rounded-xl sm:rounded-2xl p-3 sm:p-4 lg:p-6 border border-gray-200 hover:border-gray-300 hover:shadow-xl transition-all duration-300 backdrop-blur-sm">
       <div className="flex items-start justify-between mb-2 sm:mb-4">
         <div className={`p-2 sm:p-3 rounded-lg sm:rounded-xl bg-gradient-to-br ${color}`}>
-          <Icon className="text-white" size={20} className="sm:w-6 sm:h-6" />
+          <Icon className="text-white sm:w-6 sm:h-6" size={20} />
         </div>
         {trend && (
           <div className="flex items-center gap-1 px-2 py-1 bg-green-50 rounded text-xs">

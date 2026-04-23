@@ -17,8 +17,8 @@ export default function Blast() {
     name: '',
     message: '',
     group_name: '',
-    delay_min: 3000,
-    delay_max: 7000
+    delay_min: 1200,
+    delay_max: 2200
   });
 
   useEffect(() => {
@@ -237,7 +237,7 @@ export default function Blast() {
                 onChange={e => setForm({...form, delay_max: Number(e.target.value)})} />
             </div>
           </div>
-          <p className="text-xs text-yellow-600">⚠️ Keep delay min 3000ms to reduce ban risk</p>
+          <p className="text-xs text-yellow-600">⚠️ For safer sending, keep delay 3000ms+ (quick mode: 1200-2200ms)</p>
 
           <button type="submit" disabled={isActive || waStatus !== 'connected'}
             className="w-full flex items-center justify-center gap-2 py-3 bg-green-500 text-white rounded-xl font-semibold hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed">
