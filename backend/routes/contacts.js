@@ -27,48 +27,158 @@ router.get('/groups', (req, res) => {
 
 // POST /api/contacts — add single contact
 router.post('/', (req, res) => {
-  const { name, phone, group_name } = req.body;
+  const { name, phone, group_name, minat_prodi, asal_sekolah } = req.body;
   if (!phone) return res.status(400).json({ error: 'Phone is required' });
 
   try {
     const result = db.prepare(
-      'INSERT OR IGNORE INTO contacts (name, phone, group_name) VALUES (?, ?, ?)'
-    ).run(name, phone, group_name || 'default');
+      'INSERT OR IGNORE INTO contacts (name, phone, group_name, minat_prodi, asal_sekolah) VALUES (?, ?, ?, ?, ?)'
+    ).run(
+      name, 
+      phone, 
+      group_name || 'default',
+      minat_prodi || 'Teknik Informatika',
+      asal_sekolah || 'unknown'
+    );
     res.json({ success: true, id: result.lastInsertRowid });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// POST /api/contacts/upload — upload CSV
+// POST /api/contacts/upload — upload CSV or TSV (ultra-smart auto-detect)
 router.post('/upload', upload.single('file'), (req, res) => {
   const results = [];
   const group_name = req.body.group_name || 'default';
+  const filePath = req.file.path;
 
-  fs.createReadStream(req.file.path)
-    .pipe(csv())
-    .on('data', (data) => results.push(data))
-    .on('end', () => {
-      let imported = 0;
-      let skipped = 0;
-      const insert = db.prepare(
-        'INSERT OR IGNORE INTO contacts (name, phone, group_name) VALUES (?, ?, ?)'
-      );
-      const insertMany = db.transaction((contacts) => {
-        for (const c of contacts) {
-          // Support columns: name, phone / Name, Phone / NAMA, NOMOR
-          const name = c.name || c.Name || c.NAMA || '';
-          const phone = c.phone || c.Phone || c.NOMOR || c.nomor || '';
-          if (phone) {
-            const r = insert.run(name, phone.toString().trim(), group_name);
+  fs.readFile(filePath, 'utf8', (err, data) => {
+    if (err) return res.status(500).json({ error: err.message });
+
+    const firstLine = data.split('\n')[0];
+    const delimiter = firstLine.includes('\t') ? '\t' : ',';
+    
+    const options = {
+      delimiter: delimiter,
+      headers: true,
+      // IMPORTANT: Don't lowercase headers to preserve "nama", "phone", etc.
+      mapHeaders: ({ header, index }) => header.trim()
+    };
+
+    fs.createReadStream(filePath)
+      .pipe(csv(options))
+      .on('data', (data) => results.push(data))
+      .on('end', () => {
+        let imported = 0;
+        let skipped = 0;
+
+        if (results.length === 0) {
+          return res.status(400).json({ error: 'File CSV kosong' });
+        }
+
+        const firstRow = results[0];
+        const headers = Object.keys(firstRow);
+        
+        // Debug log
+        console.log('[UPLOAD] Headers detected:', headers);
+        console.log('[UPLOAD] First row:', firstRow);
+
+        // SMART COLUMN DETECTION
+        let phoneCol = null;
+        let nameCol = null;
+        let groupCol = null;
+        let prodiCol = null;
+        let sekolahCol = null;
+
+        // Strategy 1: Check header names (case-insensitive)
+        for (const h of headers) {
+          const lower = h.toLowerCase();
+          if (!phoneCol && /^phone$|^nomor$|^no$|^hp$|^telepon$|^whatsapp$|^wa$|^nomor_wa/.test(lower)) phoneCol = h;
+          if (!nameCol && /^nama$|^name$|^nama_kontak$|^nama_siswa$|^contact_name$|^fullname/.test(lower)) nameCol = h;
+          if (!groupCol && /^group$|^group_name$|^kelompok$|^gelombang$|^kelas$|^grup$/.test(lower)) groupCol = h;
+          if (!prodiCol && /^prodi$|^minat_prodi$|^program_studi$|^jurusan$|^program/.test(lower)) prodiCol = h;
+          if (!sekolahCol && /^sekolah$|^asal_sekolah$|^sekolah_asal$|^instansi$|^asal$/.test(lower)) sekolahCol = h;
+        }
+
+        // Strategy 2: If still not found, look for substring match
+        if (!phoneCol) {
+          phoneCol = headers.find(h => h.toLowerCase().includes('phone') || h.toLowerCase().includes('nomor'));
+        }
+        if (!nameCol) {
+          nameCol = headers.find(h => h.toLowerCase().includes('nama') || h.toLowerCase().includes('name'));
+        }
+        if (!groupCol) {
+          groupCol = headers.find(h => h.toLowerCase().includes('group') || h.toLowerCase().includes('kelompok'));
+        }
+        if (!prodiCol) {
+          prodiCol = headers.find(h => h.toLowerCase().includes('prodi') || h.toLowerCase().includes('program'));
+        }
+        if (!sekolahCol) {
+          sekolahCol = headers.find(h => h.toLowerCase().includes('sekolah') || h.toLowerCase().includes('asal'));
+        }
+
+        // Fallback to position if not found
+        if (!phoneCol) phoneCol = headers[1] || headers[0];
+        if (!nameCol) nameCol = headers[0] || headers[1];
+        if (!groupCol) groupCol = headers[2] || headers[3];
+        if (!prodiCol) prodiCol = headers[2];
+        if (!sekolahCol) sekolahCol = headers[3];
+
+        console.log('[UPLOAD] Column mapping:', { phoneCol, nameCol, groupCol, prodiCol, sekolahCol });
+
+        const insert = db.prepare(
+          'INSERT OR IGNORE INTO contacts (name, phone, group_name, minat_prodi, asal_sekolah) VALUES (?, ?, ?, ?, ?)'
+        );
+
+        const insertMany = db.transaction((contacts) => {
+          for (const c of contacts) {
+            // Extract phone
+            let phone = (c[phoneCol] || '').toString().trim();
+            if (!phone) {
+              skipped++;
+              continue;
+            }
+
+            // Normalize phone: remove spaces, dashes, keep only digits and +
+            phone = phone.replace(/[^\d+]/g, '');
+            if (!phone.startsWith('+') && phone.length > 8) phone = '+' + phone;
+
+            // Extract name - USE EXACT COLUMN NAME
+            let name = (c[nameCol] || '').toString().trim();
+            if (!name) {
+              name = `Contact_${phone.slice(-4)}`;
+            }
+
+            // Extract optional fields
+            const minat_prodi = (c[prodiCol] || 'Teknik Informatika').toString().trim();
+            const asal_sekolah = (c[sekolahCol] || 'unknown').toString().trim();
+
+            const r = insert.run(name, phone, group_name, minat_prodi, asal_sekolah);
             r.changes ? imported++ : skipped++;
           }
-        }
+        });
+
+        insertMany(results);
+        fs.unlinkSync(filePath);
+        res.json({ 
+          success: true, 
+          imported, 
+          skipped, 
+          total: results.length,
+          detected: { 
+            nameColumn: nameCol,
+            phoneColumn: phoneCol, 
+            prodiColumn: prodiCol,
+            sekolahColumn: sekolahCol,
+            allHeaders: headers
+          }
+        });
+      })
+      .on('error', (err) => {
+        fs.unlinkSync(filePath);
+        res.status(400).json({ error: 'CSV parsing failed: ' + err.message });
       });
-      insertMany(results);
-      fs.unlinkSync(req.file.path); // cleanup
-      res.json({ success: true, imported, skipped, total: results.length });
-    });
+  });
 });
 
 // DELETE /api/contacts/:id

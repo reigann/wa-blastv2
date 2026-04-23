@@ -1,0 +1,174 @@
+const express = require('express');
+const router = express.Router();
+const clusteringService = require('../services/clusteringServiceWrapper');
+const db = require('../db/database');
+
+/**
+ * POST /api/clustering/run
+ * Trigger K-Means clustering
+ */
+router.post('/run', async (req, res) => {
+  try {
+    const { groupName = null, nClusters = null } = req.body;
+
+    // Get contacts to cluster
+    let query = 'SELECT * FROM contacts';
+    const params = [];
+
+    if (groupName) {
+      query += ' WHERE group_name = ?';
+      params.push(groupName);
+    }
+
+    const contacts = db.prepare(query).all(...params);
+
+    if (contacts.length < 2) {
+      return res.status(400).json({
+        error: 'Minimal 2 kontak diperlukan untuk clustering'
+      });
+    }
+
+    // Prepare cluster name
+    const timestamp = new Date().toISOString().slice(0, 10);
+    const clusterName = `Clustering_${groupName || 'all'}_${timestamp}`;
+
+    // Run clustering
+    const result = await clusteringService.runClustering(contacts, nClusters);
+
+    // Save results
+    const contactIds = contacts.map(c => c.id);
+    const saveResult = await clusteringService.saveClusteringResults(clusterName, result, contactIds);
+
+    res.json({
+      success: true,
+      clusterId: saveResult.clusterId,
+      message: saveResult.message,
+      metrics: {
+        silhouette_score: result.silhouette_score,
+        davies_bouldin_index: result.davies_bouldin_index,
+        n_clusters: result.n_clusters,
+        total_contacts: contactIds.length,
+        cluster_stats: result.cluster_stats
+      }
+    });
+
+  } catch (error) {
+    console.error('Clustering error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /api/clustering/results
+ * Get clustering results
+ */
+router.get('/results', (req, res) => {
+  try {
+    const { clusterId } = req.query;
+
+    if (clusterId) {
+      const result = clusteringService.getClusteringResults(parseInt(clusterId));
+      return res.json(result);
+    }
+
+    const results = clusteringService.getClusteringResults();
+    res.json({ results });
+
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /api/clustering/stats
+ * Get cluster statistics
+ */
+router.get('/stats', (req, res) => {
+  try {
+    const stats = clusteringService.getClusterStats();
+    res.json({ stats });
+
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /api/clustering/latest
+ * Get latest clustering result
+ */
+router.get('/latest', (req, res) => {
+  try {
+    const latest = db.prepare(`
+      SELECT * FROM cluster_metadata ORDER BY created_at DESC LIMIT 1
+    `).get();
+
+    if (!latest) {
+      return res.json({ latest: null });
+    }
+
+    const contacts = db.prepare(`
+      SELECT id, name, phone, cluster_id, group_name, created_at FROM contacts 
+      WHERE cluster_id >= 0
+      ORDER BY cluster_id, name
+    `).all();
+
+    const stats = db.prepare(`
+      SELECT 
+        cluster_id,
+        COUNT(*) as total,
+        ROUND(COUNT(*) * 100.0 / (SELECT COUNT(*) FROM contacts WHERE cluster_id >= 0), 1) as percentage
+      FROM contacts
+      WHERE cluster_id >= 0
+      GROUP BY cluster_id
+      ORDER BY cluster_id
+    `).all();
+
+    res.json({
+      latest,
+      contacts,
+      stats,
+      features_used: JSON.parse(latest.features_used)
+    });
+
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * DELETE /api/clustering/clear
+ * Clear all clustering results
+ */
+router.delete('/clear', (req, res) => {
+  try {
+    const result = clusteringService.clearClustering();
+    res.json(result);
+
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /api/clustering/contacts-by-cluster/:clusterId
+ * Get contacts in specific cluster
+ */
+router.get('/contacts-by-cluster/:clusterId', (req, res) => {
+  try {
+    const clusterId = parseInt(req.params.clusterId);
+
+    const contacts = db.prepare(`
+      SELECT id, name, phone, group_name FROM contacts 
+      WHERE cluster_id = ?
+      ORDER BY name
+    `).all(clusterId);
+
+    res.json({ clusterId, count: contacts.length, contacts });
+
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+module.exports = router;
