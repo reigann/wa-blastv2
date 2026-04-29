@@ -159,12 +159,15 @@ router.get('/latest', (req, res) => {
     const clusters = stats.map((cluster) => {
       const items = contacts.filter((contact) => contact.cluster_id === cluster.cluster_id);
       const groupCounter = new Map();
+      const prodiCounter = new Map();
       let totalRecency = 0;
       let totalFrequency = 0;
 
       items.forEach((item) => {
         const group = item.group_name || 'default';
         groupCounter.set(group, (groupCounter.get(group) || 0) + 1);
+        const prodi = item.minat_prodi || 'Unknown';
+        prodiCounter.set(prodi, (prodiCounter.get(prodi) || 0) + 1);
         const createdDate = new Date(item.created_at);
         const recencyDays = Math.max(Math.floor((Date.now() - createdDate.getTime()) / (1000 * 60 * 60 * 24)), 0);
         totalRecency += recencyDays;
@@ -176,13 +179,18 @@ router.get('/latest', (req, res) => {
         .slice(0, 3)
         .map(([name]) => name);
 
+      const prodiDistribution = [...prodiCounter.entries()]
+        .sort((a,b)=>b[1]-a[1])
+        .map(([name,count])=>({ name, count, percentage: items.length?Number(((count/items.length)*100).toFixed(1)):0 }));
+
       return {
         id: cluster.cluster_id,
         total: cluster.total,
         percentage: cluster.percentage,
         avg_recency: items.length ? Number((totalRecency / items.length).toFixed(1)) : 0,
         avg_frequency: items.length ? Number((totalFrequency / items.length).toFixed(1)) : 0,
-        top_groups: topGroups
+        top_groups: topGroups,
+        prodi_distribution: prodiDistribution
       };
     });
 

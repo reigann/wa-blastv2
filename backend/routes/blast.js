@@ -60,7 +60,11 @@ router.post('/start', upload.single('media'), async (req, res) => {
   if (!contact_ids && !group_name) return res.status(400).json({ error: 'Provide contact_ids or group_name' });
 
   if (getActiveBlast(username)) {
-    return res.status(400).json({ error: 'A blast is already running' });
+    // Queue the session payload and mark session as queued
+    const payload = JSON.stringify({ contact_ids: contact_ids || null, group_name: group_name || null, delay_min, delay_max, mediaPath, username, bandit_policy_id });
+    db.prepare(`INSERT INTO blast_queue (session_id, payload) VALUES (?, ?)`).run(sessionId, payload);
+    db.prepare(`UPDATE blast_sessions SET status='queued' WHERE id=?`).run(sessionId);
+    return res.json({ success: true, queued: true, sessionId, total: contacts ? contacts.length : undefined });
   }
 
   // Fetch contacts
@@ -108,6 +112,26 @@ router.delete('/sessions/:id', (req, res) => {
   db.prepare('DELETE FROM blast_logs WHERE session_id=?').run(req.params.id);
   db.prepare('DELETE FROM blast_sessions WHERE id=?').run(req.params.id);
   res.json({ success: true });
+});
+
+// GET /api/blast/interactions
+router.get('/interactions', (req, res) => {
+  try {
+    const { phone, session_id, limit } = req.query;
+    let query = 'SELECT * FROM blast_interactions';
+    const params = [];
+    const where = [];
+    if (phone) { where.push('phone LIKE ?'); params.push(`%${phone}%`); }
+    if (session_id) { where.push('session_id = ?'); params.push(Number(session_id)); }
+    if (where.length) query += ' WHERE ' + where.join(' AND ');
+    query += ' ORDER BY created_at DESC';
+    if (limit) query += ' LIMIT ' + Math.min(1000, Number(limit));
+
+    const rows = db.prepare(query).all(...params);
+    res.json({ count: rows.length, interactions: rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 module.exports = router;

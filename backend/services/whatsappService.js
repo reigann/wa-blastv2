@@ -160,7 +160,7 @@ async function ensureWhatsAppClient(username) {
     if (io) {
       io.to(roomForUser(username)).emit('wa:ready', { message: 'WhatsApp connected successfully!', phone });
     }
-    // Auto-feedback: listen to incoming messages and submit reward to bandit
+    // Auto-feedback + interaction logging: listen to incoming messages and submit reward to bandit
     client.on('message', async (msg) => {
       try {
         if (!msg) return;
@@ -173,6 +173,44 @@ async function ensureWhatsAppClient(username) {
           sender = msg.author;
         }
         if (!sender) return;
+
+        const text = (msg.body || '').trim();
+
+        // Log interaction into blast_interactions for later analysis
+        try {
+          db.prepare(`INSERT INTO blast_interactions (session_id, phone, action_type, payload) VALUES (?, ?, ?, ?)`)
+            .run(null, sender, 'reply', JSON.stringify({ text }));
+        } catch (e) {
+          // ignore insert errors
+        }
+
+        // Simple keyword-based inference to update contacts.minat_prodi
+        try {
+          const keywords = {
+            'Teknik Informatika': ['informatika', 'ti', 'teknik informatika', 'programming', 'coding'],
+            'Manajemen': ['manajemen', 'bisnis', 'management'],
+            'Akuntansi': ['akuntansi', 'accounting'],
+            'Teknik Elektro': ['elektro', 'elektronika', 'teknik elektro'],
+            'Sistem Informasi': ['sistem informasi', 'si'],
+          };
+
+          const lower = text.toLowerCase();
+          const scores = {};
+          Object.entries(keywords).forEach(([dept, keys]) => {
+            scores[dept] = keys.reduce((acc, k) => acc + (lower.includes(k) ? 1 : 0), 0);
+          });
+
+          // pick highest score >0
+          const best = Object.entries(scores).sort((a,b)=>b[1]-a[1])[0];
+          if (best && best[1] > 0) {
+            const inferred = best[0];
+            // update contacts table if phone exists
+            const phonePlain = sender.replace('@c.us','');
+            db.prepare(`UPDATE contacts SET minat_prodi=? WHERE phone LIKE ?`).run(inferred, `%${phonePlain}%`);
+          }
+        } catch (e) {
+          // ignore inference errors
+        }
 
         // Find pending bandit events for this phone
         const rows = db.prepare('SELECT * FROM bandit_events WHERE phone = ? AND reward IS NULL ORDER BY created_at DESC').all(sender);

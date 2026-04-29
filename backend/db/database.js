@@ -97,6 +97,24 @@ db.exec(`
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (policy_id) REFERENCES bandit_policies(id)
   );
+
+  -- Queue table for scheduled/queued blast sessions. Stores serialized payload so queued jobs
+  -- can be executed later in-order when the active blast finishes.
+  CREATE TABLE IF NOT EXISTS blast_queue (
+    session_id INTEGER PRIMARY KEY,
+    payload TEXT,
+    queued_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  -- Interactions table: records replies/clicks/other engagement from recipients
+  CREATE TABLE IF NOT EXISTS blast_interactions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER,
+    phone TEXT,
+    action_type TEXT,
+    payload TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
 `);
 
 function addColumnIfMissing(tableName, columnName, columnSql) {

@@ -1,0 +1,17 @@
+{
+  "name": "wa-blastv2",
+  "version": "1.0.0",
+  "description": "A full-stack WhatsApp bulk messaging system with Node.js backend and React frontend.",
+  "main": "index.js",
+  "scripts": {
+    "dev": "concurrently \"npm run dev --prefix backend\" \"npm run dev --prefix frontend\"",
+    "start": "npm --prefix backend run start & npm --prefix frontend run preview",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}

@@ -241,6 +241,35 @@ async function startBlast(sessionId, contacts, message, delayMin, delayMax, medi
     UPDATE blast_sessions SET status='completed', completed_at=CURRENT_TIMESTAMP WHERE id=?
   `).run(sessionId);
 
+  // After completing, check queue for next session and start it if present
+  try {
+    const nextRow = db.prepare(`SELECT session_id, payload FROM blast_queue ORDER BY queued_at LIMIT 1`).get();
+    if (nextRow) {
+      // Remove from queue
+      db.prepare(`DELETE FROM blast_queue WHERE session_id=?`).run(nextRow.session_id);
+
+      // Parse payload and reconstruct parameters
+      let payload = {};
+      try { payload = JSON.parse(nextRow.payload || '{}'); } catch (e) { console.error('Failed to parse queued payload', e); }
+
+      // Fetch contacts for next session
+      let nextContacts = [];
+      if (payload.contact_ids && payload.contact_ids.length > 0) {
+        const placeholders = payload.contact_ids.map(() => '?').join(',');
+        nextContacts = db.prepare(`SELECT * FROM contacts WHERE id IN (${placeholders})`).all(...payload.contact_ids);
+      } else if (payload.group_name) {
+        nextContacts = db.prepare('SELECT * FROM contacts WHERE group_name=?').all(payload.group_name);
+      }
+
+      // Update session status to running and start
+      db.prepare(`UPDATE blast_sessions SET status='running', started_at=CURRENT_TIMESTAMP WHERE id=?`).run(nextRow.session_id);
+      // Start next blast asynchronously
+      startBlast(nextRow.session_id, nextContacts, db.prepare('SELECT message FROM blast_sessions WHERE id=?').get(nextRow.session_id).message, payload.delay_min, payload.delay_max, payload.mediaPath || null, payload.username || 'default', payload.bandit_policy_id).catch(console.error);
+    }
+  } catch (err) {
+    console.error('Failed to process blast queue:', err);
+  }
+
   // Cleanup: hapus file media jika ada
   if (mediaPath && fs.existsSync(mediaPath)) {
     try {

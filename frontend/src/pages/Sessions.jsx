@@ -6,6 +6,7 @@ import {
   Modal,
   ProgressBar,
   Row,
+  Form,
 } from 'react-bootstrap';
 import toast from 'react-hot-toast';
 import {
@@ -38,6 +39,10 @@ export default function Sessions() {
     loadSessions();
     loadGroups();
   }, []);
+
+  const [filterMonth, setFilterMonth] = useState('all');
+  const [filterYear, setFilterYear] = useState('all');
+
 
   async function loadSessions() {
     try {
@@ -104,6 +109,13 @@ export default function Sessions() {
     }));
   }, [logs]);
 
+  const filteredSessions = sessions.filter(s=>{
+    const dt = new Date(s.created_at || s.updated_at);
+    const monthMatch = filterMonth === 'all' ? true : (dt.getMonth()+1) === Number(filterMonth);
+    const yearMatch = filterYear === 'all' ? true : dt.getFullYear() === Number(filterYear);
+    return monthMatch && yearMatch;
+  });
+
   return (
     <div className="page-enter-active">
       <PageHeader
@@ -116,6 +128,32 @@ export default function Sessions() {
         ]}
       />
 
+      <div className="d-flex justify-content-between align-items-center mb-3">
+        <div />
+        <div className="d-flex gap-2">
+          <Form.Select value={filterMonth} onChange={(e)=>setFilterMonth(e.target.value)} style={{width:160}}>
+            <option value="all">All Months</option>
+            <option value="1">January</option>
+            <option value="2">February</option>
+            <option value="3">March</option>
+            <option value="4">April</option>
+            <option value="5">May</option>
+            <option value="6">June</option>
+            <option value="7">July</option>
+            <option value="8">August</option>
+            <option value="9">September</option>
+            <option value="10">October</option>
+            <option value="11">November</option>
+            <option value="12">December</option>
+          </Form.Select>
+          <Form.Select value={filterYear} onChange={(e)=>setFilterYear(e.target.value)} style={{width:140}}>
+            <option value="all">All Years</option>
+            {Array.from(new Set(sessions.map(s=>new Date(s.created_at).getFullYear()))).sort((a,b)=>b-a).map(y=> (
+              <option key={y} value={String(y)}>{y}</option>
+            ))}
+          </Form.Select>
+        </div>
+      </div>
       {sessions.length === 0 ? (
         <Card className="surface-card">
           <EmptyState
@@ -130,7 +168,7 @@ export default function Sessions() {
         </Card>
       ) : (
         <Row className="g-3">
-          {sessions.map((session) => {
+          {filteredSessions.map((session) => {
             const sent = session.sent || 0;
             const total = session.total || 0;
             const failed = session.failed || 0;
