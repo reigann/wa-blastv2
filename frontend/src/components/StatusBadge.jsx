@@ -1,31 +1,29 @@
-export function StatusBadge({ status }) {
-  const config = {
-    connected:    { 
-      label: 'Connected', 
-      class: 'bg-green-100 text-green-700 border border-green-300',
-      dot: 'bg-green-500'
-    },
-    qr:           { 
-      label: 'Scan QR', 
-      class: 'bg-yellow-100 text-yellow-700 border border-yellow-300',
-      dot: 'bg-yellow-500 animate-pulse'
-    },
-    connecting:   { 
-      label: 'Connecting', 
-      class: 'bg-blue-100 text-blue-700 border border-blue-300',
-      dot: 'bg-blue-500 animate-pulse'
-    },
-    disconnected: { 
-      label: 'Disconnected', 
-      class: 'bg-red-100 text-red-700 border border-red-300',
-      dot: 'bg-red-500'
-    }
-  };
-  const c = config[status] || config.disconnected;
+import { Badge } from 'react-bootstrap';
+
+const variants = {
+  active: { bg: '#e8fff0', color: '#128c7e', text: 'Active' },
+  idle: { bg: '#edf2f7', color: '#475569', text: 'Idle' },
+  error: { bg: '#fff1f2', color: '#b91c1c', text: 'Error' },
+  running: { bg: '#ecfdf3', color: '#0f766e', text: 'Running' },
+  completed: { bg: '#ecfdf3', color: '#166534', text: 'Completed' },
+  cancelled: { bg: '#f1f5f9', color: '#475569', text: 'Cancelled' },
+  failed: { bg: '#fff1f2', color: '#b91c1c', text: 'Failed' },
+  delivered: { bg: '#ecfdf3', color: '#166534', text: 'Delivered' },
+  read: { bg: '#e0f2fe', color: '#0c4a6e', text: 'Read' },
+  sent: { bg: '#ecfdf3', color: '#166534', text: 'Sent' },
+  info: { bg: '#eff6ff', color: '#1d4ed8', text: 'Info' },
+  warn: { bg: '#fff7ed', color: '#b45309', text: 'Warn' },
+  success: { bg: '#ecfdf3', color: '#166534', text: 'Success' },
+  inactive: { bg: '#fff1f2', color: '#b91c1c', text: 'Inactive' },
+};
+
+export default function StatusBadge({ status = 'info', text }) {
+  const key = String(status || 'info').toLowerCase();
+  const style = variants[key] || variants.info;
+
   return (
-    <span className={`inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-semibold ${c.class} shadow-sm`}>
-      <span className={`w-2.5 h-2.5 rounded-full ${c.dot}`}></span>
-      {c.label}
-    </span>
+    <Badge style={{ background: style.bg, color: style.color }}>
+      {text || style.text}
+    </Badge>
   );
 }

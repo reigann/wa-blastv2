@@ -20,6 +20,11 @@ db.exec(`
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
     content TEXT NOT NULL,
+    category TEXT DEFAULT 'General',
+    media_path TEXT,
+    media_type TEXT,
+    media_name TEXT,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
 
@@ -68,16 +73,53 @@ db.exec(`
     FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
     UNIQUE(contact_id, feature_name)
   );
+
+  -- Bandit policy table: stores serialized policy state (A_inv, b per arm)
+  CREATE TABLE IF NOT EXISTS bandit_policies (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT,
+    arms INTEGER DEFAULT 0,
+    feature_names TEXT,
+    policy_state TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  -- Bandit events: logs each recommend action and later feedback (reward)
+  CREATE TABLE IF NOT EXISTS bandit_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    policy_id INTEGER,
+    phone TEXT,
+    context TEXT,
+    arm INTEGER,
+    reward REAL,
+    session_id INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (policy_id) REFERENCES bandit_policies(id)
+  );
 `);
 
-// Add missing columns to existing contacts table if they don't exist
-try {
-  db.exec(`
-    ALTER TABLE contacts ADD COLUMN minat_prodi TEXT DEFAULT 'Teknik Informatika';
-    ALTER TABLE contacts ADD COLUMN asal_sekolah TEXT DEFAULT 'unknown';
-  `);
-} catch (err) {
-  // Columns likely already exist, ignore
+function addColumnIfMissing(tableName, columnName, columnSql) {
+  const columns = db.prepare(`PRAGMA table_info(${tableName})`).all();
+  const hasColumn = columns.some((column) => column.name === columnName);
+  if (!hasColumn) {
+    db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnSql};`);
+  }
 }
+
+// Add missing columns to contacts table if they don't exist
+addColumnIfMissing('contacts', 'minat_prodi', "minat_prodi TEXT DEFAULT 'Teknik Informatika'");
+addColumnIfMissing('contacts', 'asal_sekolah', "asal_sekolah TEXT DEFAULT 'unknown'");
+addColumnIfMissing('contacts', 'cluster_id', 'cluster_id INTEGER DEFAULT -1');
+
+// Add missing columns to templates table if they don't exist
+addColumnIfMissing('templates', 'category', "category TEXT DEFAULT 'General'");
+addColumnIfMissing('templates', 'media_path', 'media_path TEXT');
+addColumnIfMissing('templates', 'media_type', 'media_type TEXT');
+addColumnIfMissing('templates', 'media_name', 'media_name TEXT');
+addColumnIfMissing('templates', 'updated_at', 'updated_at DATETIME');
+
+// Ensure bandit_events has phone column for backward compatibility
+addColumnIfMissing('bandit_events', 'phone', 'phone TEXT');
 
 module.exports = db;

@@ -23,7 +23,7 @@ class ClusteringServiceWrapper {
     // Windows paths
     if (os.platform() === 'win32') {
       candidates.push(
-        path.join(__dirname, '../../.venv/Scripts/python.exe'),
+        path.join(__dirname, '../.venv/Scripts/python.exe'),
         'python.exe',
         'python3.exe',
         'py.exe'
@@ -31,8 +31,8 @@ class ClusteringServiceWrapper {
     } else {
       // Unix/Linux/Mac paths
       candidates.push(
-        path.join(__dirname, '../../.venv/bin/python'),
-        path.join(__dirname, '../../.venv/bin/python3'),
+        path.join(__dirname, '../.venv/bin/python'),
+        path.join(__dirname, '../.venv/bin/python3'),
         'python',
         'python3'
       );
@@ -61,7 +61,7 @@ class ClusteringServiceWrapper {
   /**
    * Run K-Means clustering on contacts
    */
-  async runClustering(contacts, nClusters = null) {
+  async runClustering(contacts, nClusters = null, selectedFeatures = []) {
     return new Promise((resolve, reject) => {
       try {
         // Check if Python is available
@@ -70,11 +70,24 @@ class ClusteringServiceWrapper {
         }
 
         // Prepare data
-        const contactData = contacts.map(c => ({
-          id: c.id,
-          minat_prodi: c.minat_prodi || 'Teknik Informatika',
-          asal_sekolah: c.asal_sekolah || 'unknown'
-        }));
+        const sentLogCountStmt = db.prepare(`
+          SELECT COUNT(*) AS total_sent
+          FROM blast_logs
+          WHERE phone = ? AND status = 'sent'
+        `);
+
+        const contactData = contacts.map((c) => {
+          const logStats = sentLogCountStmt.get(c.phone);
+
+          return {
+            id: c.id,
+            group_name: c.group_name || 'default',
+            created_at: c.created_at,
+            message_count: logStats?.total_sent || 0,
+            minat_prodi: c.minat_prodi || 'Teknik Informatika',
+            asal_sekolah: c.asal_sekolah || 'unknown',
+          };
+        });
 
         const args = [
           path.join(__dirname, 'clusteringService.py'),
@@ -83,6 +96,9 @@ class ClusteringServiceWrapper {
 
         if (nClusters) {
           args.push(nClusters.toString());
+        }
+        if (selectedFeatures && selectedFeatures.length > 0) {
+          args.push(JSON.stringify(selectedFeatures));
         }
 
         // Spawn Python process
@@ -125,6 +141,9 @@ class ClusteringServiceWrapper {
               return reject(new Error(result.error || 'Unknown clustering error'));
             }
             console.log('✅ Python clustering completed successfully');
+            if (selectedFeatures && selectedFeatures.length > 0) {
+              result.features_used = selectedFeatures;
+            }
             resolve(result);
           } catch (e) {
             console.error('❌ Failed to parse Python output:', output);

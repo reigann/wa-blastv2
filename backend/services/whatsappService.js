@@ -1,58 +1,124 @@
 const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 const qrcode = require('qrcode');
-const fs = require('fs');
-const path = require('path');
+const db = require('../db/database');
+const banditService = require('./banditService');
 
-let client = null;
-let clientStatus = 'disconnected'; // disconnected | qr | connecting | connected
-let currentQR = null;
 let io = null;
-let reconnectTimer = null;
-let isInitializing = false;
 
-function emitStatus() {
-  if (io) {
-    io.emit('wa:status', clientStatus);
+const userStates = new Map();
+
+function roomForUser(username) {
+  return `user:${username}`;
+}
+
+function sanitizeClientId(username) {
+  return String(username || 'default')
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]/g, '-')
+    .slice(0, 40);
+}
+
+function getState(username, createIfMissing = true) {
+  const key = String(username || 'default');
+  let state = userStates.get(key);
+
+  if (!state && createIfMissing) {
+    state = {
+      username: key,
+      status: 'disconnected',
+      qr: null,
+      client: null,
+      isInitializing: false,
+      reconnectTimer: null,
+    };
+    userStates.set(key, state);
+  }
+
+  return state || null;
+}
+
+function emitStatus(username) {
+  if (!io) return;
+  const state = getState(username, false);
+  const status = state?.status || 'disconnected';
+  // Emit basic status string for backward compatibility
+  io.to(roomForUser(username)).emit('wa:status', status);
+  if (state?.qr) {
+    io.to(roomForUser(username)).emit('wa:qr', state.qr);
   }
 }
 
-function scheduleReconnect(delay = 5000) {
-  if (!io) return;
-  if (reconnectTimer) return;
+function extractPhoneFromClient(client) {
+  try {
+    if (!client) return null;
+    const me = client.info && client.info.me ? client.info.me : null;
+    if (!me) return null;
 
-  reconnectTimer = setTimeout(async () => {
-    reconnectTimer = null;
-    await initWhatsApp(io);
+    // me may be an object or string; attempt common shapes
+    if (typeof me === 'string') {
+      return me.replace('@c.us', '');
+    }
+
+    if (me._serialized) {
+      return String(me._serialized).replace('@c.us', '');
+    }
+
+    if (me.id && me.id.user) {
+      return String(me.id.user).replace('@c.us', '');
+    }
+
+    if (me.user) {
+      return String(me.user).replace('@c.us', '');
+    }
+
+    return null;
+  } catch (err) {
+    return null;
+  }
+}
+
+function scheduleReconnect(username, delay = 5000) {
+  const state = getState(username);
+  if (state.reconnectTimer) return;
+
+  state.reconnectTimer = setTimeout(async () => {
+    state.reconnectTimer = null;
+    await ensureWhatsAppClient(username);
   }, delay);
 }
 
-async function cleanupClient() {
-  if (!client) return;
+async function cleanupClient(username) {
+  const state = getState(username);
+  if (!state.client) return;
 
   try {
-    await client.destroy();
+    await state.client.destroy();
   } catch (err) {
-    console.error('Failed to destroy WhatsApp client:', err.message);
+    // ignore destroy errors
   }
 
-  client = null;
+  state.client = null;
 }
 
-async function initWhatsApp(socketIo) {
-  io = socketIo;
+async function ensureWhatsAppClient(username) {
+  const state = getState(username);
 
-  if (isInitializing) {
-    return;
+  if (state.client && (state.status === 'connected' || state.status === 'connecting' || state.status === 'qr')) {
+    return state.client;
   }
 
-  isInitializing = true;
+  if (state.isInitializing) {
+    return state.client;
+  }
 
-  await cleanupClient();
-  clientStatus = 'connecting';
-  emitStatus();
+  state.isInitializing = true;
+  await cleanupClient(username);
+  state.status = 'connecting';
+  state.qr = null;
+  emitStatus(username);
 
-  client = new Client({
-    authStrategy: new LocalAuth({ clientId: 'wa-blaster' }),
+  const client = new Client({
+    authStrategy: new LocalAuth({ clientId: `wa-${sanitizeClientId(username)}` }),
     puppeteer: {
       headless: true,
       args: [
@@ -62,199 +128,242 @@ async function initWhatsApp(socketIo) {
         '--disable-accelerated-2d-canvas',
         '--no-first-run',
         '--no-zygote',
-        '--disable-gpu'
-      ]
-    }
+        '--disable-gpu',
+      ],
+    },
   });
+
+  state.client = client;
 
   client.on('qr', async (qr) => {
-    console.log('QR RECEIVED');
-    clientStatus = 'qr';
-    currentQR = await qrcode.toDataURL(qr);
-    io.emit('wa:qr', currentQR);
-    emitStatus();
+    state.status = 'qr';
+    state.qr = await qrcode.toDataURL(qr);
+    emitStatus(username);
   });
 
-  client.on('loading_screen', (percent, message) => {
-    clientStatus = 'connecting';
-    emitStatus();
-    io.emit('wa:loading', { percent, message });
+  client.on('loading_screen', () => {
+    state.status = 'connecting';
+    emitStatus(username);
   });
 
   client.on('authenticated', () => {
-    console.log('AUTHENTICATED');
-    clientStatus = 'connecting';
-    currentQR = null;
-    emitStatus();
+    state.status = 'connecting';
+    state.qr = null;
+    emitStatus(username);
   });
 
   client.on('ready', () => {
-    console.log('CLIENT IS READY');
-    clientStatus = 'connected';
-    currentQR = null;
-    emitStatus();
-    io.emit('wa:ready', { message: 'WhatsApp connected successfully!' });
+    state.status = 'connected';
+    state.qr = null;
+    emitStatus(username);
+    const phone = extractPhoneFromClient(client);
+    if (io) {
+      io.to(roomForUser(username)).emit('wa:ready', { message: 'WhatsApp connected successfully!', phone });
+    }
+    // Auto-feedback: listen to incoming messages and submit reward to bandit
+    client.on('message', async (msg) => {
+      try {
+        if (!msg) return;
+        // ignore messages sent by this client
+        if (msg.fromMe) return;
+
+        // Determine sender (handle group messages)
+        let sender = msg.from || null;
+        if (sender && sender.endsWith('@g.us') && msg.author) {
+          sender = msg.author;
+        }
+        if (!sender) return;
+
+        // Find pending bandit events for this phone
+        const rows = db.prepare('SELECT * FROM bandit_events WHERE phone = ? AND reward IS NULL ORDER BY created_at DESC').all(sender);
+        if (!rows || rows.length === 0) return;
+
+        const windowHours = Number(process.env.BANDIT_FEEDBACK_WINDOW_HOURS) || 24;
+        const now = Date.now();
+
+        for (const ev of rows) {
+          const created = new Date(ev.created_at);
+          const hours = (now - created.getTime()) / (1000 * 60 * 60);
+          if (hours <= windowHours) {
+            try {
+              const res = await banditService.feedback(ev.id, 1);
+              if (io) io.to(roomForUser(username)).emit('bandit:auto_feedback', { eventId: ev.id, phone: sender, reward: 1, result: res });
+            } catch (err) {
+              console.error('bandit feedback error:', err?.message || err);
+            }
+          }
+        }
+
+      } catch (err) {
+        console.error('Auto-feedback listener error:', err?.message || err);
+      }
+    });
   });
 
-  // Prevent EventEmitter "Unhandled 'error' event" crashes from whatsapp-web.js/puppeteer internals.
   client.on('error', (err) => {
-    console.error('WhatsApp client error:', err?.message || err);
-    clientStatus = 'disconnected';
-    emitStatus();
-    scheduleReconnect(3000);
+    state.status = 'disconnected';
+    state.qr = null;
+    emitStatus(username);
+    scheduleReconnect(username, 3000);
   });
 
-  client.on('auth_failure', (message) => {
-    console.error('AUTH FAILURE:', message);
-    clientStatus = 'disconnected';
-    currentQR = null;
-    emitStatus();
-    scheduleReconnect(5000);
+  client.on('auth_failure', () => {
+    state.status = 'disconnected';
+    state.qr = null;
+    emitStatus(username);
+    scheduleReconnect(username, 5000);
   });
 
   client.on('disconnected', (reason) => {
-    console.log('CLIENT DISCONNECTED', reason);
-    clientStatus = 'disconnected';
-    emitStatus();
-    io.emit('wa:disconnected', { reason });
-    scheduleReconnect(5000);
+    state.status = 'disconnected';
+    state.qr = null;
+    emitStatus(username);
+    if (io) {
+      io.to(roomForUser(username)).emit('wa:disconnected', { reason });
+    }
+    scheduleReconnect(username, 5000);
   });
 
   try {
-    // Suppress Puppeteer execution context errors during initialization
-    const originalConsoleError = console.error;
-    let suppressNextError = false;
-    
-    console.error = function(...args) {
-      const message = args[0]?.toString?.() || String(args[0]);
-      if (message.includes('Execution context was destroyed') || 
-          message.includes('Target closed') ||
-          message.includes('Session closed')) {
-        suppressNextError = true;
-        return; // Don't log these known navigation errors
-      }
-      originalConsoleError.apply(console, args);
-    };
-
     await client.initialize();
-    
-    // Restore console.error
-    console.error = originalConsoleError;
   } catch (err) {
     const message = err?.message || String(err);
-    
-    // Suppress known non-fatal puppeteer errors
-    if (message.includes('Execution context was destroyed') || 
-        message.includes('Target closed') ||
-        message.includes('Session closed') ||
-        message.includes('Navigation failed')) {
-      console.warn('[PUPPETEER] Non-fatal navigation error (ignored):', message);
-      clientStatus = 'connecting'; // Stay in connecting state, will retry
-      // Don't schedule immediate reconnect for these transient errors
-      return;
+    if (
+      message.includes('Execution context was destroyed') ||
+      message.includes('Target closed') ||
+      message.includes('Session closed') ||
+      message.includes('Navigation failed')
+    ) {
+      state.status = 'connecting';
+      emitStatus(username);
+    } else {
+      state.status = 'disconnected';
+      state.qr = null;
+      emitStatus(username);
+      scheduleReconnect(username, 5000);
     }
-    
-    console.error('Failed to initialize WhatsApp client:', message);
-    clientStatus = 'disconnected';
-    emitStatus();
-    scheduleReconnect(5000);
   } finally {
-    isInitializing = false;
-  }
-}
-
-function getClient() {
-  return client;
-}
-
-function getStatus() {
-  return { status: clientStatus, qr: currentQR };
-}
-
-async function sendMessage(phone, message) {
-  if (!client || clientStatus !== 'connected') {
-    throw new Error('WhatsApp client is not connected');
+    state.isInitializing = false;
   }
 
-  // Format nomor Indonesia: 08xxx → 628xxx@c.us
-  let formatted = phone.replace(/\D/g, '');
+  return state.client;
+}
+
+function setSocketServer(socketIo) {
+  io = socketIo;
+}
+
+function getStatus(username) {
+  const state = getState(username, false);
+  if (!state) {
+    return { status: 'disconnected', qr: null };
+  }
+  const basic = { status: state.status, qr: state.qr };
+  // include phone number when connected (best-effort)
+  try {
+    if (state.client && state.status === 'connected') {
+      const phone = extractPhoneFromClient(state.client);
+      if (phone) basic.phone = phone;
+    }
+  } catch (err) {
+    // ignore
+  }
+  return basic;
+}
+
+function getClient(username) {
+  return getState(username, false)?.client || null;
+}
+
+function normalizePhone(phone) {
+  let formatted = String(phone || '').replace(/\D/g, '');
   if (formatted.startsWith('0')) {
-    formatted = '62' + formatted.slice(1);
+    formatted = `62${formatted.slice(1)}`;
   } else if (!formatted.startsWith('62')) {
-    formatted = '62' + formatted;
+    formatted = `62${formatted}`;
   }
-  const chatId = `${formatted}@c.us`;
+  return `${formatted}@c.us`;
+}
+
+async function ensureConnectedClient(username) {
+  await ensureWhatsAppClient(username);
+  const state = getState(username);
+  if (!state.client || state.status !== 'connected') {
+    throw new Error('WhatsApp client is not connected. Please scan QR first.');
+  }
+  return state.client;
+}
+
+async function sendMessage(phone, message, username) {
+  const client = await ensureConnectedClient(username);
+  const chatId = normalizePhone(phone);
 
   try {
-    // Check if number exists on WhatsApp (with timeout)
     const checkPromise = client.isRegisteredUser(chatId);
-    const timeoutPromise = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('Registration check timeout')), 15000)
-    );
-    
+    const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Registration check timeout')), 15000));
     const isRegistered = await Promise.race([checkPromise, timeoutPromise]);
     if (!isRegistered) {
       throw new Error(`Number ${phone} is not registered on WhatsApp`);
     }
   } catch (err) {
-    // If registration check fails/times out, try sending anyway (WhatsApp will error if truly invalid)
-    console.warn(`Registration check warning for ${phone}:`, err.message);
+    // continue and let sendMessage decide
   }
 
-  // Send message
   await client.sendMessage(chatId, message);
   return true;
 }
 
-async function sendMessageWithMedia(phone, message, mediaPath) {
-  if (!client || clientStatus !== 'connected') {
-    throw new Error('WhatsApp client is not connected');
-  }
-
-  // Format nomor Indonesia: 08xxx → 628xxx@c.us
-  let formatted = phone.replace(/\D/g, '');
-  if (formatted.startsWith('0')) {
-    formatted = '62' + formatted.slice(1);
-  } else if (!formatted.startsWith('62')) {
-    formatted = '62' + formatted;
-  }
-  const chatId = `${formatted}@c.us`;
+async function sendMessageWithMedia(phone, message, mediaPath, username) {
+  const client = await ensureConnectedClient(username);
+  const chatId = normalizePhone(phone);
 
   try {
-    // Check if number exists on WhatsApp (with timeout)
     const checkPromise = client.isRegisteredUser(chatId);
-    const timeoutPromise = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('Registration check timeout')), 15000)
-    );
-    
+    const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Registration check timeout')), 15000));
     const isRegistered = await Promise.race([checkPromise, timeoutPromise]);
     if (!isRegistered) {
       throw new Error(`Number ${phone} is not registered on WhatsApp`);
     }
   } catch (err) {
-    // If registration check fails/times out, try sending anyway (WhatsApp will error if truly invalid)
-    console.warn(`Registration check warning for ${phone}:`, err.message);
+    // continue and let sendMessage decide
   }
 
-  // Load media dari file atau URL
-  let media;
-  if (mediaPath.startsWith('http')) {
-    media = await MessageMedia.fromUrl(mediaPath, { unsafeMime: true });
-  } else {
-    media = MessageMedia.fromFilePath(mediaPath);
-  }
+  const media = mediaPath.startsWith('http')
+    ? await MessageMedia.fromUrl(mediaPath, { unsafeMime: true })
+    : MessageMedia.fromFilePath(mediaPath);
 
-  // Kirim media dengan caption (teks pesan)
   await client.sendMessage(chatId, media, { caption: message || '' });
   return true;
 }
 
-async function logout() {
-  if (client) {
-    await client.logout();
-    clientStatus = 'disconnected';
-    emitStatus();
+async function logout(username) {
+  const state = getState(username, false);
+  if (!state) return;
+
+  try {
+    if (state.client) {
+      await state.client.logout();
+      await state.client.destroy();
+    }
+  } catch (err) {
+    // ignore
   }
+
+  state.client = null;
+  state.qr = null;
+  state.status = 'disconnected';
+  emitStatus(username);
 }
 
-module.exports = { initWhatsApp, getClient, getStatus, sendMessage, sendMessageWithMedia, logout };
+module.exports = {
+  initWhatsApp: setSocketServer,
+  setSocketServer,
+  ensureWhatsAppClient,
+  getClient,
+  getStatus,
+  sendMessage,
+  sendMessageWithMedia,
+  logout,
+  normalizePhone,
+  roomForUser,
+};

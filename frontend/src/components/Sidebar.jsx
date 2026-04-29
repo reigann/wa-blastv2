@@ -1,91 +1,84 @@
-import { useState } from 'react';
-import { Link, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Users, Send, FileText, ScrollText, BarChart3, Layers, LogOut } from 'lucide-react';
-import { authAPI } from '../services/api';
-import toast from 'react-hot-toast';
+import { NavLink, useLocation } from 'react-router-dom';
 
-const menu = [
-  { path: '/',           label: 'Dashboard', icon: LayoutDashboard },
-  { path: '/contacts',   label: 'Contacts',  icon: Users },
-  { path: '/clustering', label: 'Clustering', icon: Layers },
-  { path: '/blast',      label: 'Blast',     icon: Send },
-  { path: '/sessions',   label: 'Sessions',  icon: BarChart3 },
-  { path: '/templates',  label: 'Templates', icon: FileText },
-  { path: '/logs',       label: 'Logs',      icon: ScrollText }
+const sections = [
+  {
+    title: 'Main',
+    items: [
+      { to: '/', label: 'Dashboard', icon: 'bi-speedometer2' },
+      { to: '/contacts', label: 'Contacts', icon: 'bi-people' },
+      { to: '/templates', label: 'Templates', icon: 'bi-chat-left-text' },
+      { to: '/blast', label: 'Blast', icon: 'bi-send' },
+    ],
+  },
+  {
+    title: 'Monitoring',
+    items: [
+      { to: '/sessions', label: 'Sessions', icon: 'bi-broadcast' },
+      { to: '/logs', label: 'Logs', icon: 'bi-activity' },
+    ],
+  },
+  {
+    title: 'Tools',
+    items: [{ to: '/clustering', label: 'Clustering', icon: 'bi-diagram-3' }],
+  },
 ];
 
-export default function Sidebar() {
-  const { pathname } = useLocation();
-  const [isLoggingOut, setIsLoggingOut] = useState(false);
+export default function Sidebar({ mobileOpen, closeMobile, collapsed, setCollapsed, canCollapse, currentUser, onLogoutApp }) {
+  const location = useLocation();
+  const initials = String(currentUser?.username || 'U')
+    .slice(0, 2)
+    .toUpperCase();
+  
 
-  async function handleLogout() {
-    if (!confirm('Disconnect WhatsApp? You will need to scan the QR code again to reconnect.')) {
-      return;
-    }
-
-    setIsLoggingOut(true);
-    try {
-      await authAPI.logout();
-      toast.success('WhatsApp disconnected successfully!');
-    } catch (error) {
-      console.error('Logout failed:', error);
-      toast.error('Failed to disconnect WhatsApp');
-    } finally {
-      setIsLoggingOut(false);
-    }
-  }
   return (
-    <aside className="w-64 bg-gradient-to-b from-slate-900 to-slate-800 h-screen flex flex-col shrink-0 shadow-2xl">
-      {/* Header */}
-      <div className="p-6 border-b border-slate-700">
-        <div className="flex items-center gap-3 mb-1">
-          <div className="w-10 h-10 bg-gradient-to-br from-green-400 to-emerald-500 rounded-lg flex items-center justify-center text-white font-bold text-lg shadow-lg">
-            📱
-          </div>
-          <div>
-            <h1 className="font-bold text-lg text-white">WA Blaster</h1>
-            <p className="text-xs text-slate-400">Bulk Messenger</p>
+    <>
+      {mobileOpen ? <div className="sidebar-backdrop d-md-none" onClick={closeMobile} /> : null}
+
+      <aside className={`app-sidebar ${mobileOpen ? 'mobile-open' : ''}`}>
+        <div className="sidebar-logo">
+          <span className="logo-icon">
+            <i className="bi bi-whatsapp" />
+          </span>
+          <div className="logo-label">
+            <div className="fw-semibold text-white">WA Blaster</div>
+            <div className="small text-white-50">Broadcast Center</div>
           </div>
         </div>
-      </div>
 
-      {/* Navigation */}
-      <nav className="flex-1 p-4 space-y-2 overflow-y-auto">
-        {menu.map(m => {
-          const Icon = m.icon;
-          const active = pathname === m.path;
-          return (
-            <Link 
-              key={m.path} 
-              to={m.path}
-              className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 font-medium text-sm
-                ${active 
-                  ? 'bg-gradient-to-r from-green-500 to-emerald-500 text-white shadow-lg shadow-green-500/50' 
-                  : 'text-slate-300 hover:bg-slate-700/50 hover:text-white'}`}
+        <div className="sidebar-nav">
+          {sections.map((section) => (
+            <div key={section.title}>
+              <div className="sidebar-section-title">{section.title}</div>
+              {section.items.map((item) => (
+                <NavLink
+                  key={item.to}
+                  to={item.to}
+                  onClick={closeMobile}
+                  className={({ isActive }) => `sidebar-item ${isActive || location.pathname === item.to ? 'active' : ''}`}
+                  title={collapsed ? item.label : undefined}
+                >
+                  <i className={`bi ${item.icon}`} />
+                  <span className="sidebar-label">{item.label}</span>
+                  <span className="sidebar-item-tooltip">{item.label}</span>
+                </NavLink>
+              ))}
+            </div>
+          ))}
+        </div>
+
+        <div className="sidebar-footer">
+          {canCollapse ? (
+            <button
+              className="sidebar-collapse-btn"
+              onClick={() => setCollapsed((prev) => !prev)}
+              aria-label="Toggle sidebar collapse"
             >
-              <Icon size={20} />
-              <span>{m.label}</span>
-              {active && <div className="ml-auto w-2 h-2 bg-white rounded-full"></div>}
-            </Link>
-          );
-        })}
-      </nav>
-
-      {/* Footer */}
-      <div className="p-4 border-t border-slate-700 space-y-3">
-        <div className="bg-slate-700/50 rounded-lg p-3 text-center">
-          <p className="text-xs text-slate-300">v1.0.0</p>
-          <p className="text-slate-400 text-xs mt-1">Connected & Ready</p>
+              <i className={`bi ${collapsed ? 'bi-layout-sidebar-inset' : 'bi-layout-sidebar'}`} />
+              <span className="sidebar-collapse-label ms-2">{collapsed ? 'Expand' : 'Collapse'}</span>
+            </button>
+          ) : null}
         </div>
-        <button
-          onClick={handleLogout}
-          disabled={isLoggingOut}
-          className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 hover:border-red-500/50 text-red-400 hover:text-red-300 rounded-lg transition-all duration-200 font-medium text-sm disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          <LogOut size={18} />
-          <span>{isLoggingOut ? 'Disconnecting...' : 'Logout WA'}</span>
-        </button>
-      </div>
-    </aside>
+      </aside>
+    </>
   );
 }

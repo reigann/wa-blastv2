@@ -1,479 +1,256 @@
-import { useEffect, useState } from 'react';
-import { blastAPI, contactsAPI, authAPI } from '../services/api';
-import { StatusBadge } from '../components/StatusBadge';
-import { QRModal } from '../components/QRModal';
-import { useSocket } from '../hooks/useSocket';
-import toast from 'react-hot-toast';
+import { memo, useEffect, useMemo, useState } from 'react';
+import { Card, Col, Row } from 'react-bootstrap';
 import {
-  Users, Send, CheckCircle, XCircle, TrendingUp, Activity,
-  Calendar, Zap, Target, Globe, Clock, AlertCircle, BarChart3,
-  PieChart as PieIcon, LogOut
-} from 'lucide-react';
-import {
-  LineChart, Line, BarChart, Bar, PieChart, Pie, Cell,
-  XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
-  Area, AreaChart
+  Area,
+  AreaChart,
+  Cell,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
 } from 'recharts';
+import KPICard from '../components/KPICard';
+import PageHeader from '../components/PageHeader';
+import StatusBadge from '../components/StatusBadge';
+import DataTable from '../components/DataTable';
+import SkeletonCard from '../components/SkeletonCard';
+import { blastAPI, contactsAPI } from '../services/api';
+
+const StatusDonut = memo(function StatusDonut({ data }) {
+  return (
+    <ResponsiveContainer width="100%" height={280}>
+      <PieChart>
+        <Pie data={data} dataKey="value" innerRadius={70} outerRadius={96} paddingAngle={2}>
+          {data.map((entry) => (
+            <Cell key={entry.name} fill={entry.color} />
+          ))}
+        </Pie>
+        <Tooltip />
+      </PieChart>
+    </ResponsiveContainer>
+  );
+});
+
+const BlastArea = memo(function BlastArea({ data }) {
+  return (
+    <ResponsiveContainer width="100%" height={300}>
+      <AreaChart data={data} margin={{ left: -18, right: 6, top: 12, bottom: 0 }}>
+        <defs>
+          <linearGradient id="blastFill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="5%" stopColor="#25D366" stopOpacity={0.33} />
+            <stop offset="95%" stopColor="#25D366" stopOpacity={0.03} />
+          </linearGradient>
+        </defs>
+        <XAxis dataKey="day" tick={{ fontSize: 12, fill: '#64748b' }} axisLine={false} tickLine={false} />
+        <YAxis tick={{ fontSize: 12, fill: '#64748b' }} axisLine={false} tickLine={false} />
+        <Tooltip />
+        <Area type="monotone" dataKey="sent" stroke="#25D366" fill="url(#blastFill)" strokeWidth={3} />
+      </AreaChart>
+    </ResponsiveContainer>
+  );
+});
+
+function getDayLabel(date) {
+  return new Date(date).toLocaleDateString('en-US', { weekday: 'short' });
+}
 
 export default function Dashboard() {
-  const { waStatus, qrCode, blastProgress, blastStatus } = useSocket();
-  const [stats, setStats] = useState({
-    contacts: 0,
-    sessions: 0,
-    sent: 0,
-    failed: 0,
-    avgDeliveryTime: 0
-  });
-  const [recentSessions, setRecentSessions] = useState([]);
-  const [chartData, setChartData] = useState([]);
-  const [clusterData, setClusterData] = useState([]);
-  const [successRate, setSuccessRate] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [isLoggingOut, setIsLoggingOut] = useState(false);
-
-  async function handleLogout() {
-    if (!confirm('Disconnect WhatsApp? You will need to scan the QR code again to reconnect.')) {
-      return;
-    }
-
-    setIsLoggingOut(true);
-    try {
-      await authAPI.logout();
-      toast.success('WhatsApp disconnected successfully!');
-    } catch (error) {
-      console.error('Logout failed:', error);
-      toast.error('Failed to disconnect WhatsApp');
-    } finally {
-      setIsLoggingOut(false);
-    }
-  }
+  const [contactsTotal, setContactsTotal] = useState(0);
+  const [sessions, setSessions] = useState([]);
 
   useEffect(() => {
-    loadStats();
-    loadChartData();
-  }, [blastStatus]);
+    let mounted = true;
 
-  async function loadStats() {
-    setLoading(true);
-    try {
-      const [contacts, sessions] = await Promise.all([
-        contactsAPI.getAll(),
-        blastAPI.getSessions()
-      ]);
+    async function load() {
+      setLoading(true);
+      try {
+        const [contactsRes, sessionRes] = await Promise.all([contactsAPI.getAll(), blastAPI.getSessions()]);
+        if (!mounted) return;
 
-      const sent = sessions.data.reduce((a, s) => a + s.sent, 0);
-      const failed = sessions.data.reduce((a, s) => a + s.failed, 0);
-      const rate = sent + failed > 0 ? Math.round((sent / (sent + failed)) * 100) : 0;
-
-      // Calculate clustering: group sessions by date
-      const grouped = {};
-      sessions.data.forEach(s => {
-        const date = new Date(s.created_at).toISOString().split('T')[0];
-        if (!grouped[date]) grouped[date] = { sent: 0, failed: 0, count: 0 };
-        grouped[date].sent += s.sent;
-        grouped[date].failed += s.failed;
-        grouped[date].count += 1;
-      });
-
-      const clusters = Object.entries(grouped).map(([date, data]) => ({
-        date,
-        ...data,
-        rate: data.sent + data.failed > 0 ? Math.round((data.sent / (data.sent + data.failed)) * 100) : 0
-      }));
-
-      setClusterData(clusters.slice(-7)); // Last 7 days
-
-      setStats({
-        contacts: contacts.data.length,
-        sessions: sessions.data.length,
-        sent,
-        failed,
-        avgDeliveryTime: sessions.data.length > 0 ? '~4.2s' : '0s'
-      });
-      setSuccessRate(rate);
-      setRecentSessions(sessions.data.slice(0, 5));
-    } catch (error) {
-      console.error('Failed to load stats:', error);
-    } finally {
-      setLoading(false);
+        setContactsTotal(contactsRes.data?.length || 0);
+        setSessions((sessionRes.data || []).slice().sort((a, b) => new Date(b.created_at) - new Date(a.created_at)));
+      } catch (error) {
+        if (mounted) {
+          setContactsTotal(0);
+          setSessions([]);
+        }
+      } finally {
+        if (mounted) {
+          setLoading(false);
+        }
+      }
     }
-  }
 
-  async function loadChartData() {
-    try {
-      const sessions = await blastAPI.getSessions();
-      const data = sessions.data.slice(-30).map(s => ({
-        name: new Date(s.created_at).toLocaleDateString('id-ID').substring(0, 5),
-        sent: s.sent,
-        failed: s.failed,
-        total: s.total
-      }));
-      setChartData(data);
-    } catch (error) {
-      console.error('Failed to load chart data:', error);
+    load();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const summary = useMemo(() => {
+    const sent = sessions.reduce((acc, s) => acc + (s.sent || 0), 0);
+    const failed = sessions.reduce((acc, s) => acc + (s.failed || 0), 0);
+    const total = sent + failed;
+    const successRate = total > 0 ? Math.round((sent / total) * 100) : 0;
+    const activeSessions = sessions.filter((s) => s.status === 'running').length;
+
+    return {
+      sent,
+      failed,
+      activeSessions,
+      successRate,
+    };
+  }, [sessions]);
+
+  const areaData = useMemo(() => {
+    const map = new Map();
+    const now = new Date();
+
+    for (let i = 6; i >= 0; i -= 1) {
+      const d = new Date(now);
+      d.setDate(now.getDate() - i);
+      const key = d.toISOString().slice(0, 10);
+      map.set(key, { day: getDayLabel(d), sent: 0 });
     }
-  }
 
-  const showQRModal = ['qr', 'connecting', 'disconnected'].includes(waStatus);
-  const completedSessions = recentSessions.filter(s => s.status === 'completed').length;
+    sessions.forEach((session) => {
+      const key = new Date(session.created_at).toISOString().slice(0, 10);
+      if (map.has(key)) {
+        map.get(key).sent += session.sent || 0;
+      }
+    });
 
-  const COLORS = ['#10b981', '#ef4444', '#f59e0b', '#3b82f6'];
+    return [...map.values()];
+  }, [sessions]);
 
-  const StatCard = ({ label, value, icon: Icon, trend, color }) => (
-    <div className="group bg-white rounded-xl sm:rounded-2xl p-3 sm:p-4 lg:p-6 border border-gray-200 hover:border-gray-300 hover:shadow-xl transition-all duration-300 backdrop-blur-sm">
-      <div className="flex items-start justify-between mb-2 sm:mb-4">
-        <div className={`p-2 sm:p-3 rounded-lg sm:rounded-xl bg-gradient-to-br ${color}`}>
-          <Icon className="text-white sm:w-6 sm:h-6" size={20} />
-        </div>
-        {trend && (
-          <div className="flex items-center gap-1 px-2 py-1 bg-green-50 rounded text-xs">
-            <TrendingUp size={12} className="text-green-600" />
-            <span className="text-xs font-semibold text-green-600">{trend}%</span>
-          </div>
-        )}
-      </div>
-      <p className="text-gray-600 text-xs sm:text-sm font-medium mb-1">{label}</p>
-      <p className="text-xl sm:text-2xl lg:text-3xl font-bold text-gray-900">{typeof value === 'number' ? value.toLocaleString() : value}</p>
-    </div>
-  );
+  const donutData = useMemo(() => {
+    const sent = summary.sent;
+    const read = Math.round(sent * 0.62);
+    const delivered = Math.max(sent - read, 0);
+
+    return [
+      { name: 'Delivered', value: delivered, color: '#25D366' },
+      { name: 'Read', value: read, color: '#128C7E' },
+      { name: 'Failed', value: summary.failed, color: '#dc3545' },
+    ];
+  }, [summary]);
+
+  const columns = [
+    { key: 'campaign', label: 'Campaign' },
+    { key: 'status', label: 'Status' },
+    { key: 'contacts', label: 'Contacts' },
+    { key: 'sent', label: 'Sent' },
+    { key: 'time', label: 'Time' },
+  ];
+
+  const activities = sessions.slice(0, 8).map((session) => ({
+    id: session.id,
+    name: session.name || `Blast #${session.id}`,
+    status: session.status,
+    contacts: session.total || 0,
+    sent: session.sent || 0,
+    time: new Date(session.created_at).toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    }),
+  }));
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900">
-      {showQRModal && <QRModal qrCode={qrCode} status={waStatus} />}
+    <div className="page-enter-active">
+      <PageHeader
+        title="Dashboard"
+        subtitle="Real-time overview of message performance and delivery health"
+      />
 
-      <div className="w-full px-4 sm:px-6 lg:px-8 py-4 sm:py-6 lg:py-8">
-        {/* Header Section */}
-        <div className="mb-6 sm:mb-8">
-          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 sm:gap-4 mb-4 sm:mb-6">
-            <div>
-              <h1 className="text-2xl sm:text-3xl lg:text-4xl font-bold text-white mb-1 sm:mb-2">Dashboard</h1>
-              <p className="text-xs sm:text-sm text-gray-400 flex items-center gap-2">
-                <Globe size={14} className="hidden sm:block" />
-                <span>Real-time WhatsApp Analytics</span>
-              </p>
-            </div>
-            <div className="flex items-center gap-2 sm:gap-3 bg-gray-800/50 px-3 sm:px-4 py-2 sm:py-3 rounded-xl border border-gray-700 text-sm">
-              <Activity size={16} className="text-green-400 animate-pulse" />
-              <StatusBadge status={waStatus} />
-              {waStatus === 'connected' && (
-                <button
-                  onClick={handleLogout}
-                  disabled={isLoggingOut}
-                  className="ml-2 p-1.5 hover:bg-red-500/20 border border-red-500/30 hover:border-red-500/50 text-red-400 hover:text-red-300 rounded-lg transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
-                  title="Disconnect WhatsApp"
-                >
-                  <LogOut size={16} />
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
-
-        {/* Main Stats Grid */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 lg:gap-6 mb-6 sm:mb-8">
-          <StatCard
-            label="Total Contacts"
-            value={stats.contacts}
-            icon={Users}
-            trend={stats.contacts > 0 ? "↑ 12" : null}
-            color="from-blue-500 to-blue-600"
-          />
-          <StatCard
-            label="Campaign Sessions"
-            value={stats.sessions}
-            icon={Send}
-            trend={completedSessions > 0 ? completedSessions : null}
-            color="from-purple-500 to-purple-600"
-          />
-          <StatCard
-            label="Delivered"
-            value={stats.sent}
-            icon={CheckCircle}
-            trend={successRate}
-            color="from-green-500 to-green-600"
-          />
-          <StatCard
-            label="Failed Messages"
-            value={stats.failed}
-            icon={XCircle}
-            trend={null}
-            color="from-red-500 to-red-600"
-          />
-        </div>
-
-        {/* KPI Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4 lg:gap-6 mb-6 sm:mb-8">
-          <div className="bg-white/5 border border-gray-700/50 rounded-xl sm:rounded-2xl p-4 sm:p-6 backdrop-blur-sm hover:bg-white/10 transition-all">
-            <div className="flex items-center justify-between mb-3 sm:mb-4">
-              <h3 className="text-white font-semibold text-sm sm:text-base flex items-center gap-2">
-                <Zap size={16} className="text-yellow-400" />
-                Delivery Rate
-              </h3>
-            </div>
-            <div className="flex items-end gap-3">
-              <p className="text-3xl sm:text-4xl font-bold text-white">{successRate}%</p>
-              <p className="text-gray-400 text-xs sm:text-sm mb-1">success</p>
-            </div>
-            <div className="mt-3 sm:mt-4 h-2 bg-gray-700 rounded-full overflow-hidden">
-              <div
-                className="h-full bg-gradient-to-r from-green-400 to-green-600 transition-all duration-500"
-                style={{ width: `${successRate}%` }}
+      <Row className="g-3 mb-4 kpi-mobile-two">
+        {loading ? (
+          Array.from({ length: 4 }).map((_, idx) => (
+            <Col xl={3} md={6} key={idx}>
+              <SkeletonCard />
+            </Col>
+          ))
+        ) : (
+          <>
+            <Col xl={3} md={6}>
+              <KPICard icon="bi-people" label="Total Contacts" value={contactsTotal.toLocaleString()} trend="8% this week" />
+            </Col>
+            <Col xl={3} md={6}>
+              <KPICard icon="bi-send-check" label="Messages Sent" value={summary.sent.toLocaleString()} trend="11% this week" />
+            </Col>
+            <Col xl={3} md={6}>
+              <KPICard icon="bi-broadcast" label="Active Sessions" value={summary.activeSessions} trend="2 live" />
+            </Col>
+            <Col xl={3} md={6}>
+              <KPICard
+                icon="bi-check-circle"
+                label="Success Rate"
+                value={`${summary.successRate}%`}
+                trend={`${Math.max(summary.successRate - 80, 0)}% this week`}
+                trendType={summary.successRate < 70 ? 'down' : 'up'}
               />
-            </div>
-          </div>
+            </Col>
+          </>
+        )}
+      </Row>
 
-          <div className="bg-white/5 border border-gray-700/50 rounded-xl sm:rounded-2xl p-4 sm:p-6 backdrop-blur-sm hover:bg-white/10 transition-all">
-            <div className="flex items-center justify-between mb-3 sm:mb-4">
-              <h3 className="text-white font-semibold text-sm sm:text-base flex items-center gap-2">
-                <Clock size={16} className="text-blue-400" />
-                Avg Response
-              </h3>
-            </div>
-            <div className="flex items-end gap-3">
-              <p className="text-3xl sm:text-4xl font-bold text-white">{stats.avgDeliveryTime}</p>
-              <p className="text-gray-400 text-xs sm:text-sm mb-1">per msg</p>
-            </div>
-            <p className="text-gray-500 text-xs mt-3 sm:mt-4">Within range</p>
-          </div>
-
-          <div className="bg-white/5 border border-gray-700/50 rounded-xl sm:rounded-2xl p-4 sm:p-6 backdrop-blur-sm hover:bg-white/10 transition-all sm:col-span-2 lg:col-span-1">
-            <div className="flex items-center justify-between mb-3 sm:mb-4">
-              <h3 className="text-white font-semibold text-sm sm:text-base flex items-center gap-2">
-                <Target size={16} className="text-pink-400" />
-                Active Campaign
-              </h3>
-            </div>
-            <div className="flex items-end gap-3">
-              <p className="text-3xl sm:text-4xl font-bold text-white">{blastProgress ? blastProgress.current : '0'}</p>
-              <p className="text-gray-400 text-xs sm:text-sm mb-1">processing</p>
-            </div>
-            <p className="text-gray-500 text-xs mt-3 sm:mt-4">
-              {blastProgress ? `${Math.round((blastProgress.current / blastProgress.total) * 100)}% done` : 'No active'}
-            </p>
-          </div>
-        </div>
-
-        {/* Charts Section */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 sm:gap-4 lg:gap-6 mb-6 sm:mb-8">
-          {/* Delivery Trend */}
-          <div className="lg:col-span-2 bg-white/5 border border-gray-700/50 rounded-xl sm:rounded-2xl p-4 sm:p-6 backdrop-blur-sm overflow-hidden">
-            <h3 className="text-white font-semibold mb-3 sm:mb-4 text-sm sm:text-base flex items-center gap-2">
-              <BarChart3 size={16} className="text-cyan-400" />
-              <span>Delivery Trend (30D)</span>
-            </h3>
-            <div className="w-full h-64 sm:h-80 lg:h-96">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={chartData} margin={{ top: 5, right: 10, left: -20, bottom: 5 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-                  <XAxis dataKey="name" stroke="#9ca3af" style={{ fontSize: '11px' }} />
-                  <YAxis stroke="#9ca3af" style={{ fontSize: '11px' }} />
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: '#1f2937',
-                      border: '1px solid #374151',
-                      borderRadius: '8px',
-                      color: '#fff',
-                      fontSize: '12px'
-                    }}
-                  />
-                  <Legend wrapperStyle={{ fontSize: '12px' }} />
-                  <Bar dataKey="sent" fill="#10b981" name="Delivered" radius={[8, 8, 0, 0]} />
-                  <Bar dataKey="failed" fill="#ef4444" name="Failed" radius={[8, 8, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-
-          {/* Performance Distribution */}
-          <div className="bg-white/5 border border-gray-700/50 rounded-xl sm:rounded-2xl p-4 sm:p-6 backdrop-blur-sm overflow-hidden">
-            <h3 className="text-white font-semibold mb-3 sm:mb-4 text-sm sm:text-base flex items-center gap-2">
-              <PieIcon size={16} className="text-orange-400" />
-              Performance
-            </h3>
-            <div className="w-full h-64 sm:h-80 lg:h-96">
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart margin={{ top: 0, right: 0, left: 0, bottom: 0 }}>
-                  <Pie
-                    data={[
-                      { name: 'Delivered', value: stats.sent },
-                      { name: 'Failed', value: stats.failed }
-                    ]}
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={40}
-                    outerRadius={70}
-                    paddingAngle={2}
-                    dataKey="value"
-                  >
-                    {[<Cell key="cell-1" fill="#10b981" />, <Cell key="cell-2" fill="#ef4444" />]}
-                  </Pie>
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: '#1f2937',
-                      border: '1px solid #374151',
-                      borderRadius: '8px',
-                      color: '#fff',
-                      fontSize: '12px'
-                    }}
-                  />
-                </PieChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-        </div>
-
-        {/* Clustering Analysis */}
-        <div className="bg-white/5 border border-gray-700/50 rounded-xl sm:rounded-2xl p-4 sm:p-6 backdrop-blur-sm mb-6 sm:mb-8">
-          <h3 className="text-white font-semibold mb-4 sm:mb-6 text-sm sm:text-base flex items-center gap-2">
-            <BarChart3 size={16} className="text-indigo-400" />
-            Daily Clustering Analysis
-          </h3>
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
-            {/* Line Chart - Success Rate Over Time */}
-            <div>
-              <p className="text-gray-300 text-xs sm:text-sm font-medium mb-3 sm:mb-4">Success Rate Trend</p>
-              <div className="w-full h-60 sm:h-72">
-                <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={clusterData} margin={{ top: 5, right: 10, left: -20, bottom: 5 }}>
-                    <defs>
-                      <linearGradient id="colorRate" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.8} />
-                        <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-                    <XAxis dataKey="date" stroke="#9ca3af" style={{ fontSize: '11px' }} />
-                    <YAxis stroke="#9ca3af" style={{ fontSize: '11px' }} />
-                    <Tooltip
-                      contentStyle={{
-                        backgroundColor: '#1f2937',
-                        border: '1px solid #374151',
-                        borderRadius: '8px',
-                        color: '#fff',
-                        fontSize: '12px'
-                      }}
-                    />
-                    <Area type="monotone" dataKey="rate" stroke="#3b82f6" fillOpacity={1} fill="url(#colorRate)" />
-                  </AreaChart>
-                </ResponsiveContainer>
+      <Row className="g-3 mb-4 charts-stack-mobile">
+        <Col lg={8}>
+          <Card className="surface-card hover-lift h-100">
+            <Card.Body>
+              <div className="d-flex justify-content-between align-items-center mb-3">
+                <h3 className="mb-0">7-Day Blast Performance</h3>
+                <StatusBadge status="success" text="Live" />
               </div>
-            </div>
+              <BlastArea data={areaData} />
+            </Card.Body>
+          </Card>
+        </Col>
 
-            {/* Cluster Stats Table */}
-            <div>
-              <p className="text-gray-300 text-xs sm:text-sm font-medium mb-3 sm:mb-4">Daily Metrics</p>
-              <div className="space-y-2 max-h-72 overflow-y-auto pr-2">
-                {clusterData.slice().reverse().map((cluster, idx) => (
-                  <div key={idx} className="bg-gray-800/30 rounded-lg p-2 sm:p-3 border border-gray-700/30 hover:border-gray-600 transition-all">
-                    <div className="flex items-center justify-between mb-1 sm:mb-2">
-                      <p className="text-gray-300 text-xs sm:text-sm font-medium">{cluster.date}</p>
-                      <span className={`px-2 py-0.5 rounded text-xs font-semibold ${
-                        cluster.rate >= 80 ? 'bg-green-500/20 text-green-400' :
-                        cluster.rate >= 50 ? 'bg-yellow-500/20 text-yellow-400' :
-                        'bg-red-500/20 text-red-400'
-                      }`}>
-                        {cluster.rate}%
-                      </span>
-                    </div>
-                    <div className="flex gap-2 sm:gap-3 text-xs">
-                      <span className="text-green-400 whitespace-nowrap">✓ {cluster.sent}</span>
-                      <span className="text-red-400 whitespace-nowrap">✗ {cluster.failed}</span>
-                      <span className="text-gray-400 whitespace-nowrap">• {cluster.count}x</span>
-                    </div>
-                  </div>
+        <Col lg={4}>
+          <Card className="surface-card hover-lift h-100">
+            <Card.Body>
+              <h3 className="mb-3">Status Breakdown</h3>
+              <StatusDonut data={donutData} />
+              <div className="d-flex flex-wrap gap-2 justify-content-center mt-2">
+                {donutData.map((item) => (
+                  <span key={item.name} className="small d-inline-flex align-items-center gap-1">
+                    <span className="status-dot" style={{ background: item.color }} />
+                    {item.name}
+                  </span>
                 ))}
               </div>
-            </div>
-          </div>
-        </div>
+            </Card.Body>
+          </Card>
+        </Col>
+      </Row>
 
-        {/* Recent Campaigns Table */}
-        <div className="bg-white/5 border border-gray-700/50 rounded-xl sm:rounded-2xl backdrop-blur-sm overflow-hidden">
-          <div className="bg-gradient-to-r from-gray-800/50 to-gray-700/30 p-3 sm:p-4 lg:p-6 border-b border-gray-700/50">
-            <h2 className="text-lg sm:text-xl font-semibold text-white flex items-center gap-2">
-              <Calendar size={18} className="text-cyan-400" />
-              Recent Campaigns
-            </h2>
+      <Card className="surface-card hover-lift">
+        <Card.Body className="p-0">
+          <div className="p-3 border-bottom">
+            <h3 className="mb-0">Recent Activity</h3>
           </div>
-
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-gray-800/50 border-b border-gray-700/50 sticky top-0">
-                <tr>
-                  <th className="text-left px-3 sm:px-6 py-3 sm:py-4 text-xs font-semibold text-gray-300 uppercase tracking-wider">Campaign</th>
-                  <th className="text-center px-2 sm:px-6 py-3 sm:py-4 text-xs font-semibold text-gray-300 uppercase tracking-wider hidden sm:table-cell">Target</th>
-                  <th className="text-center px-2 sm:px-6 py-3 sm:py-4 text-xs font-semibold text-gray-300 uppercase tracking-wider">✓ Sent</th>
-                  <th className="text-center px-2 sm:px-6 py-3 sm:py-4 text-xs font-semibold text-gray-300 uppercase tracking-wider hidden sm:table-cell">✗ Failed</th>
-                  <th className="text-center px-2 sm:px-6 py-3 sm:py-4 text-xs font-semibold text-gray-300 uppercase tracking-wider">Rate</th>
-                  <th className="text-center px-2 sm:px-6 py-3 sm:py-4 text-xs font-semibold text-gray-300 uppercase tracking-wider hidden lg:table-cell">Status</th>
-                  <th className="text-left px-2 sm:px-6 py-3 sm:py-4 text-xs font-semibold text-gray-300 uppercase tracking-wider hidden lg:table-cell">Date</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-700/30">
-                {recentSessions.map((session) => {
-                  const rate = session.total > 0 ? Math.round((session.sent / session.total) * 100) : 0;
-                  return (
-                    <tr key={session.id} className="hover:bg-gray-800/30 transition-colors duration-200">
-                      <td className="px-3 sm:px-6 py-2 sm:py-4">
-                        <p className="font-medium text-white text-xs sm:text-sm truncate">{session.name}</p>
-                      </td>
-                      <td className="text-center px-2 sm:px-6 py-2 sm:py-4 hidden sm:table-cell">
-                        <span className="inline-flex items-center justify-center px-2 sm:px-3 py-1 bg-gray-700 rounded text-xs sm:text-sm font-semibold text-gray-200">
-                          {session.total}
-                        </span>
-                      </td>
-                      <td className="text-center px-2 sm:px-6 py-2 sm:py-4">
-                        <span className="text-xs sm:text-sm font-bold text-green-400">{session.sent}</span>
-                      </td>
-                      <td className="text-center px-2 sm:px-6 py-2 sm:py-4 hidden sm:table-cell">
-                        <span className="text-xs sm:text-sm font-bold text-red-400">{session.failed}</span>
-                      </td>
-                      <td className="text-center px-2 sm:px-6 py-2 sm:py-4">
-                        <div className="flex items-center justify-center gap-1 sm:gap-2">
-                          <div className="w-8 sm:w-16 bg-gray-700 rounded-full h-1.5 sm:h-2">
-                            <div
-                              className={`h-full rounded-full transition-all ${
-                                rate >= 80 ? 'bg-green-500' :
-                                rate >= 50 ? 'bg-yellow-500' :
-                                'bg-red-500'
-                              }`}
-                              style={{ width: `${rate}%` }}
-                            />
-                          </div>
-                          <span className="text-xs font-semibold text-gray-300 w-6 sm:w-8">{rate}%</span>
-                        </div>
-                      </td>
-                      <td className="text-center px-2 sm:px-6 py-2 sm:py-4 hidden lg:table-cell">
-                        <span className={`inline-flex items-center px-2 sm:px-3 py-1 rounded text-xs font-bold ${
-                          session.status === 'completed' ? 'bg-green-500/20 text-green-400' :
-                          session.status === 'running' ? 'bg-blue-500/20 text-blue-400' :
-                          session.status === 'cancelled' ? 'bg-gray-500/20 text-gray-400' :
-                          'bg-red-500/20 text-red-400'
-                        }`}>
-                          {session.status === 'completed' ? '✓' : 
-                           session.status === 'running' ? '⟳' : 
-                           session.status === 'cancelled' ? '◯' : '✗'} <span className="hidden sm:inline">{session.status}</span>
-                        </span>
-                      </td>
-                      <td className="text-left px-2 sm:px-6 py-2 sm:py-4 hidden lg:table-cell">
-                        <p className="text-xs sm:text-sm text-gray-400">{new Date(session.created_at).toLocaleDateString('id-ID')}</p>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-
-          {recentSessions.length === 0 && (
-            <div className="text-center py-8 sm:py-12">
-              <Send size={24} className="text-gray-600 mx-auto mb-2 sm:mb-3" />
-              <p className="text-gray-400 font-medium text-sm">No campaigns yet</p>
-              <p className="text-gray-500 text-xs mt-1">Create your first campaign to see analytics</p>
-            </div>
-          )}
-        </div>
-      </div>
+          <DataTable
+            columns={columns}
+            rows={activities}
+            renderRow={(item) => (
+              <tr key={item.id}>
+                <td className="fw-medium">{item.name}</td>
+                <td>
+                  <StatusBadge status={item.status} text={item.status} />
+                </td>
+                <td>{item.contacts}</td>
+                <td>{item.sent}</td>
+                <td className="text-secondary">{item.time}</td>
+              </tr>
+            )}
+          />
+        </Card.Body>
+      </Card>
     </div>
   );
 }

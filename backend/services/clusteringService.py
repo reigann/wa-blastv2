@@ -7,6 +7,7 @@ Handles feature extraction, clustering, and evaluation metrics
 import json
 import sys
 import numpy as np
+from datetime import datetime
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import silhouette_score, davies_bouldin_score
@@ -21,37 +22,79 @@ class ContactClusteringService:
         self.features = None
         self.feature_names = None
         
-    def extract_features(self, contacts):
-        """Extract features dari contact data"""
+    def _parse_date(self, date_str):
+        if not date_str:
+            return datetime.now()
+        try:
+            return datetime.fromisoformat(str(date_str).replace('Z', ''))
+        except Exception:
+            return datetime.now()
+
+    def extract_features(self, contacts, selected_features=None):
+        """Extract features dari contact data. Menambahkan pengkodean one-hot untuk `minat_prodi`.
+        Jika `prodi` dipilih di `selected_features`, ambil top-N kategori prodi dan buat binary features.
+        """
         features_list = []
         feature_names = []
-        
+        # Default: sertakan prodi agar cluster dapat mencerminkan minat prodi
+        selected = selected_features or ['recency', 'frequency', 'group', 'prodi']
+
+        # Jika prodi diminta, cari top categories
+        top_prodis = []
+        if 'prodi' in selected:
+            prodi_counts = {}
+            for c in contacts:
+                p = (c.get('minat_prodi') or 'unknown').strip()
+                key = p.lower()
+                prodi_counts[key] = prodi_counts.get(key, 0) + 1
+
+            # Ambil top 5 prodi (atau kurang jika data sedikit)
+            top_prodis = [k for k, _ in sorted(prodi_counts.items(), key=lambda x: x[1], reverse=True)][:5]
+
         for contact in contacts:
             features = []
-            
-            # Feature 1: Minat Prodi (one-hot encoded)
-            prodi = contact.get('minat_prodi', 'unknown').lower()
-            prodi_mapping = {
-                'teknik informatika': [1, 0, 0],
-                'ilmu komputer': [0, 1, 0],
-                'sistem informasi': [0, 0, 1]
-            }
-            prodi_features = prodi_mapping.get(prodi, [0, 0, 1])
-            features.extend(prodi_features)
-            
-            if len(feature_names) == 0:
-                feature_names.extend(['prodi_ti', 'prodi_ilkom', 'prodi_si'])
-            
-            # Feature 2: Asal Sekolah (hash location string)
-            sekolah = contact.get('asal_sekolah', 'unknown').lower()
-            sekolah_hash = sum(ord(c) for c in sekolah) % 10
-            features.append(sekolah_hash / 10.0)
-            
-            if len(feature_names) == 3:
-                feature_names.append('sekolah_hash')
-            
+
+            if 'recency' in selected:
+                created_at = self._parse_date(contact.get('created_at'))
+                recency_days = max((datetime.now() - created_at).days, 0)
+                features.append(float(recency_days))
+                if 'recency_days' not in feature_names:
+                    feature_names.append('recency_days')
+
+            if 'frequency' in selected:
+                message_count = float(contact.get('message_count', 0))
+                features.append(message_count)
+                if 'message_count' not in feature_names:
+                    feature_names.append('message_count')
+
+            if 'group' in selected:
+                group_name = str(contact.get('group_name', 'default')).lower()
+                group_hash = sum(ord(c) for c in group_name) % 100
+                features.append(float(group_hash))
+                if 'group_hash' not in feature_names:
+                    feature_names.append('group_hash')
+
+            if 'prodi' in selected:
+                prodi_val = (contact.get('minat_prodi') or 'unknown').strip().lower()
+                # Jika tidak ada top_prodis (jarang), buat fitur satu untuk nilai prodi
+                if len(top_prodis) == 0:
+                    # fallback: use simple hashing to produce numeric feature
+                    prodi_hash = sum(ord(c) for c in prodi_val) % 100
+                    features.append(float(prodi_hash))
+                    if 'prodi_hash' not in feature_names:
+                        feature_names.append('prodi_hash')
+                else:
+                    for p in top_prodis:
+                        val = 1.0 if prodi_val == p else 0.0
+                        features.append(val)
+                    # add feature names once
+                    if not any(fn.startswith('prodi_') for fn in feature_names):
+                        for p in top_prodis:
+                            sanitized = p.replace(' ', '_')[:30]
+                            feature_names.append(f'prodi_{sanitized}')
+
             features_list.append(features)
-        
+
         self.features = np.array(features_list)
         self.feature_names = feature_names
         return self.features, feature_names
@@ -126,11 +169,11 @@ class ContactClusteringService:
         
         return stats
     
-    def process(self, contacts, n_clusters=None):
+    def process(self, contacts, n_clusters=None, selected_features=None):
         """Main processing pipeline"""
         try:
             # Step 1: Extract features
-            self.extract_features(contacts)
+            self.extract_features(contacts, selected_features)
             
             # Step 2: Normalize
             self.normalize_features()
@@ -172,11 +215,21 @@ def main():
     try:
         # Parse input
         contacts = json.loads(sys.argv[1])
-        n_clusters = int(sys.argv[2]) if len(sys.argv) > 2 else None
-        
+        n_clusters = None
+        selected_features = None
+
+        if len(sys.argv) > 2:
+            try:
+                n_clusters = int(sys.argv[2])
+            except ValueError:
+                selected_features = json.loads(sys.argv[2])
+
+        if len(sys.argv) > 3:
+            selected_features = json.loads(sys.argv[3])
+
         # Process
         service = ContactClusteringService()
-        result = service.process(contacts, n_clusters)
+        result = service.process(contacts, n_clusters, selected_features)
         
         # Output result as JSON
         print(json.dumps(result))

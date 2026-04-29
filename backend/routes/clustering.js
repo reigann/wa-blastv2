@@ -16,7 +16,7 @@ router.post('/run', async (req, res) => {
       });
     }
 
-    const { groupName = null, nClusters = null } = req.body;
+    const { groupName = null, nClusters = null, features = [] } = req.body;
 
     // Get contacts to cluster
     let query = 'SELECT * FROM contacts';
@@ -43,9 +43,16 @@ router.post('/run', async (req, res) => {
 
     // Parse nClusters as integer
     const parsedNClusters = nClusters ? parseInt(nClusters) : null;
+    if (parsedNClusters !== null && (Number.isNaN(parsedNClusters) || parsedNClusters < 2 || parsedNClusters > 8)) {
+      return res.status(400).json({ error: 'nClusters harus di antara 2 sampai 8' });
+    }
+
+    const selectedFeatures = Array.isArray(features)
+      ? features.filter((item) => ['recency', 'frequency', 'group', 'prodi'].includes(item))
+      : [];
 
     // Run clustering
-    const result = await clusteringService.runClustering(contacts, parsedNClusters);
+    const result = await clusteringService.runClustering(contacts, parsedNClusters, selectedFeatures);
 
     // Save results
     const contactIds = contacts.map(c => c.id);
@@ -60,7 +67,8 @@ router.post('/run', async (req, res) => {
         davies_bouldin_index: result.davies_bouldin_index,
         n_clusters: result.n_clusters,
         total_contacts: contactIds.length,
-        cluster_stats: result.cluster_stats
+        cluster_stats: result.cluster_stats,
+        features_used: result.features_used
       }
     });
 
@@ -140,11 +148,56 @@ router.get('/latest', (req, res) => {
       ORDER BY cluster_id
     `).all();
 
+    const logsByPhone = db.prepare(`
+      SELECT phone, COUNT(*) AS sent_count
+      FROM blast_logs
+      WHERE status = 'sent'
+      GROUP BY phone
+    `).all();
+    const sentMap = new Map(logsByPhone.map((row) => [row.phone, row.sent_count]));
+
+    const clusters = stats.map((cluster) => {
+      const items = contacts.filter((contact) => contact.cluster_id === cluster.cluster_id);
+      const groupCounter = new Map();
+      let totalRecency = 0;
+      let totalFrequency = 0;
+
+      items.forEach((item) => {
+        const group = item.group_name || 'default';
+        groupCounter.set(group, (groupCounter.get(group) || 0) + 1);
+        const createdDate = new Date(item.created_at);
+        const recencyDays = Math.max(Math.floor((Date.now() - createdDate.getTime()) / (1000 * 60 * 60 * 24)), 0);
+        totalRecency += recencyDays;
+        totalFrequency += Number(sentMap.get(item.phone) || 0);
+      });
+
+      const topGroups = [...groupCounter.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 3)
+        .map(([name]) => name);
+
+      return {
+        id: cluster.cluster_id,
+        total: cluster.total,
+        percentage: cluster.percentage,
+        avg_recency: items.length ? Number((totalRecency / items.length).toFixed(1)) : 0,
+        avg_frequency: items.length ? Number((totalFrequency / items.length).toFixed(1)) : 0,
+        top_groups: topGroups
+      };
+    });
+
     res.json({
       latest,
       contacts,
       stats,
-      features_used: JSON.parse(latest.features_used)
+      clusters,
+      features_used: (() => {
+        try {
+          return latest.features_used ? JSON.parse(latest.features_used) : [];
+        } catch (err) {
+          return [];
+        }
+      })()
     });
 
   } catch (error) {

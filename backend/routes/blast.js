@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const multer = require('multer');
 const path = require('path');
+const fs = require('fs');
 const db = require('../db/database');
 const { startBlast, cancelBlast, getActiveBlast } = require('../services/blastService');
 
@@ -43,13 +44,22 @@ router.get('/sessions/:id/logs', (req, res) => {
 
 // POST /api/blast/start
 router.post('/start', upload.single('media'), async (req, res) => {
-  const { name, message, contact_ids, group_name, delay_min, delay_max } = req.body;
-  const mediaPath = req.file ? path.resolve(req.file.path) : null;
+  const username = req.auth?.username || 'default';
+  const { name, message, contact_ids, group_name, delay_min, delay_max, template_media_path, bandit_policy_id } = req.body;
+  let mediaPath = req.file ? path.resolve(req.file.path) : null;
+
+  if (!mediaPath && template_media_path) {
+    const normalizedPath = String(template_media_path).replace(/^\/+/, '');
+    const resolvedTemplateMedia = path.resolve(path.join(__dirname, '..', normalizedPath));
+    if (fs.existsSync(resolvedTemplateMedia)) {
+      mediaPath = resolvedTemplateMedia;
+    }
+  }
 
   if (!message) return res.status(400).json({ error: 'Message is required' });
   if (!contact_ids && !group_name) return res.status(400).json({ error: 'Provide contact_ids or group_name' });
 
-  if (getActiveBlast()) {
+  if (getActiveBlast(username)) {
     return res.status(400).json({ error: 'A blast is already running' });
   }
 
@@ -75,20 +85,22 @@ router.post('/start', upload.single('media'), async (req, res) => {
   const sessionId = session.lastInsertRowid;
 
   // Start blast asynchronously (dengan media path jika ada)
-  startBlast(sessionId, contacts, message, delay_min, delay_max, mediaPath).catch(console.error);
+  startBlast(sessionId, contacts, message, delay_min, delay_max, mediaPath, username, bandit_policy_id).catch(console.error);
 
   res.json({ success: true, sessionId, total: contacts.length, hasMedia: !!mediaPath });
 });
 
 // POST /api/blast/cancel
 router.post('/cancel', (req, res) => {
-  const cancelled = cancelBlast();
+  const username = req.auth?.username || 'default';
+  const cancelled = cancelBlast(username);
   res.json({ success: cancelled, message: cancelled ? 'Blast cancelled' : 'No active blast' });
 });
 
 // GET /api/blast/active
 router.get('/active', (req, res) => {
-  res.json({ active: getActiveBlast() !== null });
+  const username = req.auth?.username || 'default';
+  res.json({ active: getActiveBlast(username) !== null });
 });
 
 // DELETE /api/blast/sessions/:id

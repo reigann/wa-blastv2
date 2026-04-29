@@ -1,0 +1,38 @@
+/* Dashboard Bootstrap Styling */
+.dashboard-wrapper {
+  background: linear-gradient(135deg, #f8f9fa 0%, #f0fdf4 50%, #f0f9ff 100%);
+  min-height: 100vh;
+}
+
+.stat-card {
+  transition: all 0.3s ease;
+}
+
+.stat-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1) !important;
+}
+
+.stat-icon {
+  border-radius: 12px;
+  padding: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.stat-icon.bg-primary {
+  background: linear-gradient(135deg, #0d6b2f 0%, #10b981 100%);
+}
+
+.stat-icon.bg-success {
+  background: linear-gradient(135deg, #059669 0%, #10b981 100%);
+}
+
+.stat-icon.bg-danger {
+  background: linear-gradient(135deg, #dc2626 0%, #ef4444 100%);
+}
+
+.stat-icon.bg-info {
+  background: linear-gradient(135deg, #0891b2 0%, #06b6d4 100%);
+}

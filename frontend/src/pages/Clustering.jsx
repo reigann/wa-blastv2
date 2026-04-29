@@ -1,214 +1,363 @@
-import React, { useState, useEffect } from 'react';
-import { LineChart, Line, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
-import { AlertCircle, Play, Trash2, RefreshCw } from 'lucide-react';
-import axios from 'axios';
+import { useEffect, useMemo, useState } from 'react';
+import {
+  Badge,
+  Button,
+  Card,
+  Col,
+  Form,
+  Modal,
+  Row,
+  Spinner,
+} from 'react-bootstrap';
+import {
+  ResponsiveContainer,
+  Scatter,
+  ScatterChart,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts';
 import toast from 'react-hot-toast';
+import PageHeader from '../components/PageHeader';
+import EmptyState from '../components/EmptyState';
+import { blastAPI, clusteringAPI, templatesAPI } from '../services/api';
 
-// Configure axios baseURL for API calls
-axios.defaults.baseURL = 'http://localhost:3001';
+const clusterColors = ['#25D366', '#128C7E', '#dc3545', '#1a2942', '#06b6d4', '#f97316', '#6366f1', '#84cc16'];
 
-const Clustering = () => {
-  const [isLoading, setIsLoading] = useState(false);
-  const [nClusters, setNClusters] = useState(3);
-  const [latestResult, setLatestResult] = useState(null);
-  const [clusterStats, setClusterStats] = useState(null);
+function jitter(seed) {
+  const x = Math.sin(seed * 9999) * 10000;
+  return (x - Math.floor(x) - 0.5) * 0.35;
+}
 
-  // Colors untuk pie chart
-  const COLORS = ['#3B82F6', '#EF4444', '#10B981', '#F59E0B', '#8B5CF6', '#EC4899'];
+function recencyDays(dateStr) {
+  const date = new Date(dateStr);
+  if (Number.isNaN(date.getTime())) return 0;
+  return Math.max(Math.floor((Date.now() - date.getTime()) / (1000 * 60 * 60 * 24)), 0);
+}
+
+export default function Clustering() {
+  const [kValue, setKValue] = useState(3);
+  const [features, setFeatures] = useState({ recency: true, frequency: true, group: true });
+  const [loading, setLoading] = useState(false);
+  const [latestMeta, setLatestMeta] = useState(null);
+  const [clusterSummary, setClusterSummary] = useState([]);
+  const [contacts, setContacts] = useState([]);
+  const [usedFeatures, setUsedFeatures] = useState([]);
+
+  const [templates, setTemplates] = useState([]);
+  const [blastModalOpen, setBlastModalOpen] = useState(false);
+  const [blastCluster, setBlastCluster] = useState(null);
+  const [selectedTemplateId, setSelectedTemplateId] = useState('');
+  const [blastSending, setBlastSending] = useState(false);
 
   useEffect(() => {
-    fetchLatestClustering();
+    fetchLatest();
+    loadTemplates();
   }, []);
 
-  const fetchLatestClustering = async () => {
+  async function loadTemplates() {
     try {
-      const response = await axios.get('/api/clustering/latest');
-      if (response.data.latest) {
-        setLatestResult(response.data.latest);
-        setClusterStats(response.data.stats);
+      const response = await templatesAPI.getAll();
+      setTemplates(response.data || []);
+      if (response.data?.length) {
+        setSelectedTemplateId(String(response.data[0].id));
       }
     } catch (error) {
-      console.error('Error fetching clustering:', error);
+      setTemplates([]);
     }
-  };
+  }
 
-  const handleRunClustering = async () => {
-    if (nClusters < 2) {
-      toast.error('Jumlah cluster minimal 2');
+  async function fetchLatest() {
+    try {
+      const response = await clusteringAPI.latest();
+      const payload = response.data || {};
+      setLatestMeta(payload.latest || null);
+      setClusterSummary(payload.clusters || []);
+      setContacts(payload.contacts || []);
+      setUsedFeatures(payload.features_used || []);
+
+      if (payload.latest?.num_clusters) {
+        setKValue(payload.latest.num_clusters);
+      }
+    } catch (error) {
+      setLatestMeta(null);
+      setClusterSummary([]);
+      setContacts([]);
+      setUsedFeatures([]);
+    }
+  }
+
+  async function runClustering() {
+    const selectedFeatures = Object.entries(features)
+      .filter(([, checked]) => checked)
+      .map(([key]) => key);
+
+    if (selectedFeatures.length === 0) {
+      toast.error('Select at least one feature');
       return;
     }
 
-    setIsLoading(true);
+    setLoading(true);
     try {
-      const response = await axios.post('/api/clustering/run', {
-        nClusters: parseInt(nClusters)
+      const response = await clusteringAPI.run({
+        nClusters: kValue,
+        features: selectedFeatures,
       });
-
-      if (response.data.success) {
-        toast.success(`Clustering berhasil! ${response.data.message}`);
-        fetchLatestClustering();
-      }
+      toast.success(response.data?.message || 'Clustering completed');
+      await fetchLatest();
     } catch (error) {
-      const errorMsg = error.response?.data?.error || error.message || 'Error running clustering';
-      console.error('Clustering error:', error.response?.data);
-      toast.error(errorMsg);
+      toast.error(error.response?.data?.error || 'Failed to run clustering');
     } finally {
-      setIsLoading(false);
+      setLoading(false);
     }
-  };
+  }
 
-  const handleClearClustering = async () => {
-    if (!window.confirm('Apakah Anda yakin ingin menghapus clustering?')) return;
-
+  async function clearClustering() {
+    setLoading(true);
     try {
-      await axios.delete('/api/clustering/clear');
-      toast.success('Clustering berhasil dihapus');
-      setLatestResult(null);
-      setClusterStats(null);
+      await clusteringAPI.clear();
+      toast.success('Clustering data cleared');
+      setLatestMeta(null);
+      setClusterSummary([]);
+      setContacts([]);
+      setUsedFeatures([]);
     } catch (error) {
-      toast.error('Error clearing clustering');
+      toast.error('Failed to clear clustering');
+    } finally {
+      setLoading(false);
     }
-  };
+  }
+
+  const scatterDataByCluster = useMemo(() => {
+    const map = new Map();
+    contacts.forEach((contact) => {
+      const clusterId = Number(contact.cluster_id);
+      const points = map.get(clusterId) || [];
+      points.push({
+        ...contact,
+        x: clusterId + 1 + jitter(contact.id),
+        y: recencyDays(contact.created_at),
+      });
+      map.set(clusterId, points);
+    });
+    return map;
+  }, [contacts]);
+
+  const selectedTemplate = templates.find((template) => String(template.id) === String(selectedTemplateId));
+
+  function openBlastModal(cluster) {
+    setBlastCluster(cluster);
+    if (templates.length > 0) {
+      setSelectedTemplateId(String(templates[0].id));
+    }
+    setBlastModalOpen(true);
+  }
+
+  async function blastThisCluster() {
+    if (!blastCluster) return;
+    if (!selectedTemplate) {
+      toast.error('Please choose a template first');
+      return;
+    }
+
+    const contactIds = contacts
+      .filter((contact) => Number(contact.cluster_id) === Number(blastCluster.id))
+      .map((contact) => contact.id);
+
+    if (contactIds.length === 0) {
+      toast.error('No contacts in this cluster');
+      return;
+    }
+
+    setBlastSending(true);
+    try {
+      await blastAPI.start({
+        name: `Cluster ${blastCluster.id} Campaign`,
+        message: selectedTemplate.content,
+        contact_ids: contactIds,
+        delay_min: 2000,
+        delay_max: 3500,
+        template_media_path: selectedTemplate.media_path || undefined,
+      });
+      toast.success(`Blast started for Cluster ${blastCluster.id}`);
+      setBlastModalOpen(false);
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Failed to start blast');
+    } finally {
+      setBlastSending(false);
+    }
+  }
 
   return (
-    <div className="min-h-screen bg-gray-50 p-6">
-      <div className="max-w-7xl mx-auto">
-        {/* Header */}
-        <div className="mb-8">
-          <h1 className="text-4xl font-bold text-gray-900 mb-2">Segmentasi Kontak</h1>
-          <p className="text-gray-600">Otomatisasi pengelompokan kontak dengan K-Means Clustering</p>
-        </div>
+    <div className="page-enter-active">
+      <PageHeader
+        title="Clustering"
+        subtitle="Fungsi menu ini: membagi kontak ke beberapa segmen otomatis supaya kamu bisa kirim blast lebih terarah per cluster."
+      />
 
-        {/* Control Panel */}
-        <div className="bg-white rounded-lg shadow-md p-6 mb-8">
-          <h2 className="text-xl font-semibold text-gray-900 mb-6">Konfigurasi Clustering</h2>
+      <Row className="g-3 mb-3">
+        <Col md={4}>
+          <Card className="surface-card h-100">
+            <Card.Body>
+              <h3 className="mb-3" style={{ fontSize: 16 }}>Config</h3>
 
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Jumlah Cluster (K)
-              </label>
-              <input
-                type="number"
-                min="2"
-                max="10"
-                value={nClusters}
-                onChange={(e) => setNClusters(e.target.value)}
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                disabled={isLoading}
-              />
-            </div>
+              <Form.Group className="mb-3">
+                <Form.Label>K Value ({kValue})</Form.Label>
+                <Form.Range min={2} max={8} value={kValue} onChange={(event) => setKValue(Number(event.target.value))} />
+              </Form.Group>
 
-            <button
-              onClick={handleRunClustering}
-              disabled={isLoading || !nClusters}
-              className="flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white px-6 py-2 rounded-lg font-medium transition"
-            >
-              <Play size={18} />
-              {isLoading ? 'Processing...' : 'Jalankan'}
-            </button>
+              <Form.Group className="mb-3">
+                <Form.Label>Features</Form.Label>
+                <Form.Check
+                  label="Recency (umur kontak)"
+                  checked={features.recency}
+                  onChange={(event) => setFeatures((prev) => ({ ...prev, recency: event.target.checked }))}
+                />
+                <Form.Check
+                  label="Frequency (riwayat kirim)"
+                  checked={features.frequency}
+                  onChange={(event) => setFeatures((prev) => ({ ...prev, frequency: event.target.checked }))}
+                />
+                <Form.Check
+                  label="Group"
+                  checked={features.group}
+                  onChange={(event) => setFeatures((prev) => ({ ...prev, group: event.target.checked }))}
+                />
+              </Form.Group>
 
-            <button
-              onClick={fetchLatestClustering}
-              disabled={isLoading}
-              className="flex items-center justify-center gap-2 bg-gray-600 hover:bg-gray-700 text-white px-6 py-2 rounded-lg font-medium transition"
-            >
-              <RefreshCw size={18} />
-              Refresh
-            </button>
-
-            <button
-              onClick={handleClearClustering}
-              disabled={isLoading || !latestResult}
-              className="flex items-center justify-center gap-2 bg-red-600 hover:bg-red-700 disabled:bg-gray-400 text-white px-6 py-2 rounded-lg font-medium transition"
-            >
-              <Trash2 size={18} />
-              Clear
-            </button>
-          </div>
-        </div>
-
-        {/* Results Section */}
-        {latestResult ? (
-          <div className="space-y-8">
-            {/* Metrics */}
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-              <div className="bg-white rounded-lg shadow-md p-6">
-                <p className="text-gray-600 text-sm font-medium">Total Kontak</p>
-                <p className="text-3xl font-bold text-gray-900 mt-2">{latestResult.total_contacts}</p>
+              <div className="d-flex gap-2">
+                <Button className="flex-grow-1" onClick={runClustering} disabled={loading}>
+                  {loading ? <><Spinner size="sm" className="me-2" />Analyzing...</> : 'Run Clustering'}
+                </Button>
+                <Button variant="light" className="btn-outline-soft" onClick={clearClustering} disabled={loading || !latestMeta}>
+                  Clear
+                </Button>
               </div>
-              <div className="bg-white rounded-lg shadow-md p-6">
-                <p className="text-gray-600 text-sm font-medium">Jumlah Cluster</p>
-                <p className="text-3xl font-bold text-gray-900 mt-2">{latestResult.num_clusters}</p>
-              </div>
-              <div className="bg-white rounded-lg shadow-md p-6">
-                <p className="text-gray-600 text-sm font-medium">Silhouette Score</p>
-                <p className="text-3xl font-bold text-gray-900 mt-2">{latestResult.silhouette_score?.toFixed(3)}</p>
-                <p className="text-xs text-gray-500 mt-1">Range: -1 to 1 (lebih tinggi lebih baik)</p>
-              </div>
-              <div className="bg-white rounded-lg shadow-md p-6">
-                <p className="text-gray-600 text-sm font-medium">Davies-Bouldin Index</p>
-                <p className="text-3xl font-bold text-gray-900 mt-2">{latestResult.davies_bouldin_index?.toFixed(3)}</p>
-                <p className="text-xs text-gray-500 mt-1">Lebih rendah lebih baik</p>
-              </div>
-            </div>
 
-            {/* Cluster Distribution */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              {/* Pie Chart */}
-              <div className="bg-white rounded-lg shadow-md p-6">
-                <h3 className="text-lg font-semibold text-gray-900 mb-4">Distribusi Cluster</h3>
-                <ResponsiveContainer width="100%" height={300}>
-                  <PieChart>
-                    <Pie
-                      data={clusterStats || []}
-                      dataKey="total"
-                      nameKey="cluster_id"
-                      cx="50%"
-                      cy="50%"
-                      outerRadius={100}
-                      label
-                    >
-                      {(clusterStats || []).map((entry, index) => (
-                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+              {latestMeta ? (
+                <div className="mt-3 small text-secondary">
+                  <div>Silhouette: <strong>{Number(latestMeta.silhouette_score || 0).toFixed(3)}</strong></div>
+                  <div>Davies-Bouldin: <strong>{Number(latestMeta.davies_bouldin_index || 0).toFixed(3)}</strong></div>
+                  <div>Total Contacts: <strong>{latestMeta.total_contacts || 0}</strong></div>
+                </div>
+              ) : null}
+            </Card.Body>
+          </Card>
+        </Col>
+
+        <Col md={8}>
+          <Card className="surface-card h-100">
+            <Card.Body>
+              <div className="d-flex justify-content-between align-items-center mb-3">
+                <h3 className="mb-0" style={{ fontSize: 16 }}>Cluster Visualization</h3>
+                <div className="small text-secondary">
+                  Active features: {usedFeatures.length ? usedFeatures.join(', ') : '-'}
+                </div>
+              </div>
+
+              {contacts.length === 0 ? (
+                <EmptyState title="No clustering data" description="Run clustering to generate cluster segments" />
+              ) : (
+                <div style={{ height: 340 }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <ScatterChart>
+                      <XAxis type="number" dataKey="x" name="Cluster" domain={[0.5, 8.5]} tickFormatter={(value) => `${Math.round(value)}`} />
+                      <YAxis type="number" dataKey="y" name="Recency (days)" />
+                      <Tooltip
+                        formatter={(value, name) => [value, name]}
+                        labelFormatter={() => 'Contact Point'}
+                        content={({ active, payload }) => {
+                          if (!active || !payload || payload.length === 0) return null;
+                          const point = payload[0].payload;
+                          return (
+                            <div className="p-2 border bg-white rounded shadow-sm small">
+                              <div className="fw-semibold">{point.name}</div>
+                              <div>{point.phone}</div>
+                              <div>Cluster: {point.cluster_id}</div>
+                              <div>Recency: {point.y} days</div>
+                            </div>
+                          );
+                        }}
+                      />
+                      {clusterSummary.map((cluster, index) => (
+                        <Scatter
+                          key={cluster.id}
+                          name={`Cluster ${cluster.id}`}
+                          data={scatterDataByCluster.get(Number(cluster.id)) || []}
+                          fill={clusterColors[index % clusterColors.length]}
+                        />
                       ))}
-                    </Pie>
-                    <Tooltip />
-                    <Legend />
-                  </PieChart>
-                </ResponsiveContainer>
-              </div>
+                    </ScatterChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+            </Card.Body>
+          </Card>
+        </Col>
+      </Row>
 
-              {/* Bar Chart */}
-              <div className="bg-white rounded-lg shadow-md p-6">
-                <h3 className="text-lg font-semibold text-gray-900 mb-4">Ukuran Cluster</h3>
-                <ResponsiveContainer width="100%" height={300}>
-                  <BarChart
-                    data={clusterStats || []}
-                    margin={{ top: 20, right: 30, left: 0, bottom: 0 }}
-                  >
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="cluster_id" label={{ value: 'Cluster ID', position: 'insideBottomRight', offset: -5 }} />
-                    <YAxis label={{ value: 'Jumlah Kontak', angle: -90, position: 'insideLeft' }} />
-                    <Tooltip />
-                    <Bar dataKey="total" fill="#3B82F6" name="Kontak" />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-
-
-          </div>
+      <Row className="g-3">
+        {clusterSummary.length === 0 ? (
+          <Col>
+            <Card className="surface-card">
+              <EmptyState title="Cluster details unavailable" description="Run clustering to see actionable cluster cards" />
+            </Card>
+          </Col>
         ) : (
-          <div className="bg-white rounded-lg shadow-md p-12 text-center">
-            <AlertCircle className="w-16 h-16 text-gray-400 mx-auto mb-4" />
-            <p className="text-gray-600 text-lg mb-4">Belum ada hasil clustering</p>
-            <p className="text-gray-500 text-sm">Jalankan clustering untuk mulai segmentasi kontak</p>
-          </div>
+          clusterSummary.map((cluster, index) => (
+            <Col lg={4} md={6} key={cluster.id}>
+              <Card className="surface-card hover-lift h-100">
+                <Card.Body>
+                  <div className="d-flex align-items-center justify-content-between mb-3">
+                    <div className="d-flex align-items-center gap-2">
+                      <span className="status-dot" style={{ background: clusterColors[index % clusterColors.length], width: 12, height: 12 }} />
+                      <h3 className="mb-0" style={{ fontSize: 16 }}>Cluster {cluster.id}</h3>
+                    </div>
+                    <Badge bg="light" text="dark">{cluster.percentage}%</Badge>
+                  </div>
+
+                  <div className="small text-secondary mb-1">Size: <strong>{cluster.total}</strong></div>
+                  <div className="small text-secondary mb-1">Avg Recency: <strong>{cluster.avg_recency} days</strong></div>
+                  <div className="small text-secondary mb-1">Avg Frequency: <strong>{cluster.avg_frequency}</strong></div>
+                  <div className="small text-secondary mb-3">Top Groups: <strong>{cluster.top_groups?.join(', ') || '-'}</strong></div>
+
+                  <Button variant="primary" className="w-100" onClick={() => openBlastModal(cluster)}>
+                    Blast this cluster
+                  </Button>
+                </Card.Body>
+              </Card>
+            </Col>
+          ))
         )}
-      </div>
+      </Row>
+
+      <Modal show={blastModalOpen} onHide={() => setBlastModalOpen(false)} centered>
+        <Modal.Header closeButton>
+          <Modal.Title>Blast Cluster {blastCluster?.id}</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          <Form.Group className="mb-3">
+            <Form.Label>Template Message</Form.Label>
+            <Form.Select value={selectedTemplateId} onChange={(event) => setSelectedTemplateId(event.target.value)}>
+              {templates.map((template) => (
+                <option key={template.id} value={template.id}>{template.name}</option>
+              ))}
+            </Form.Select>
+          </Form.Group>
+
+          <div className="small text-secondary">
+            Contacts in cluster: <strong>{contacts.filter((contact) => Number(contact.cluster_id) === Number(blastCluster?.id)).length}</strong>
+          </div>
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="light" className="btn-outline-soft" onClick={() => setBlastModalOpen(false)}>
+            Cancel
+          </Button>
+          <Button onClick={blastThisCluster} disabled={blastSending || !selectedTemplate}>
+            {blastSending ? 'Starting...' : 'Start Blast'}
+          </Button>
+        </Modal.Footer>
+      </Modal>
     </div>
   );
-};
-
-export default Clustering;
+}

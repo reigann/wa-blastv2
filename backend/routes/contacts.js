@@ -27,7 +27,7 @@ router.get('/groups', (req, res) => {
 
 // POST /api/contacts — add single contact
 router.post('/', (req, res) => {
-  const { name, phone, group_name, minat_prodi, asal_sekolah } = req.body;
+  const { name, phone, group_name, group, minat_prodi, asal_sekolah } = req.body;
   if (!phone) return res.status(400).json({ error: 'Phone is required' });
 
   try {
@@ -36,11 +36,38 @@ router.post('/', (req, res) => {
     ).run(
       name, 
       phone, 
-      group_name || 'default',
+      group_name || group || 'default',
       minat_prodi || 'Teknik Informatika',
       asal_sekolah || 'unknown'
     );
     res.json({ success: true, id: result.lastInsertRowid });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PUT /api/contacts/:id — update single contact
+router.put('/:id', (req, res) => {
+  const { name, phone, group_name, group, minat_prodi, asal_sekolah } = req.body;
+  const existing = db.prepare('SELECT * FROM contacts WHERE id=?').get(req.params.id);
+  if (!existing) {
+    return res.status(404).json({ error: 'Contact not found' });
+  }
+
+  try {
+    db.prepare(`
+      UPDATE contacts
+      SET name=?, phone=?, group_name=?, minat_prodi=?, asal_sekolah=?
+      WHERE id=?
+    `).run(
+      name || existing.name,
+      phone || existing.phone,
+      group_name || group || existing.group_name || 'default',
+      minat_prodi || existing.minat_prodi || 'Teknik Informatika',
+      asal_sekolah || existing.asal_sekolah || 'unknown',
+      req.params.id,
+    );
+    res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

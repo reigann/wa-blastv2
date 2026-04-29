@@ -1,0 +1,25 @@
+# This is an example configuration file
+# To learn more, see the full config.yaml reference: https://docs.continue.dev/reference
+
+name: NVIDIA DeepSeek Config
+version: 1.0.0
+schema: v1
+
+models:
+  - name: deepseek-ai/deepseek-v4-flash
+    provider: openai
+    model: meta/llama3-70b-instruct
+    apiBase: https://integrate.api.nvidia.com/v1
+    apiKey: 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
+
+defaultModel: nvidia-llama
+
+context:
+  - provider: code
+  - provider: docs
+  - provider: diff
+
+# MCP Servers that Continue can access
+# https://docs.continue.dev/customization/mcp-tools
+mcpServers:
+  - uses: anthropic/memory-mcp
