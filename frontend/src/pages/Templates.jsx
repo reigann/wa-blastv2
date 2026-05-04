@@ -30,6 +30,7 @@ export default function Templates() {
     name: "",
     category: "Marketing",
     content: "",
+    link: "",
   });
   const [attachmentFile, setAttachmentFile] = useState(null);
   const [attachmentPreviewUrl, setAttachmentPreviewUrl] = useState("");
@@ -63,7 +64,7 @@ export default function Templates() {
 
   function openCreate() {
     setEditing(null);
-    setForm({ name: "", category: "Marketing", content: "" });
+    setForm({ name: "", category: "Marketing", content: "", link: "" });
     setAttachmentFile(null);
     setRemoveExistingMedia(false);
     setModalOpen(true);
@@ -75,6 +76,7 @@ export default function Templates() {
       name: template.name || "",
       category: template.category || "Marketing",
       content: template.content || "",
+      link: template.link || "",
     });
     setAttachmentFile(null);
     setRemoveExistingMedia(false);
@@ -121,6 +123,7 @@ export default function Templates() {
       payload.append("name", form.name.trim());
       payload.append("content", form.content);
       payload.append("category", form.category || "General");
+      payload.append("link", form.link || "");
       if (attachmentFile) {
         payload.append("attachment", attachmentFile);
       }
@@ -150,6 +153,7 @@ export default function Templates() {
       payload.append("name", `${template.name} Copy`);
       payload.append("content", template.content || "");
       payload.append("category", template.category || "General");
+      payload.append("link", template.link || "");
       await templatesAPI.create(payload);
       toast.success("Template duplicated (without attachment)");
       await loadTemplates();
@@ -394,6 +398,21 @@ export default function Templates() {
                 </div>
                 <small className="text-secondary d-block mt-2">
                   {form.content.length} characters
+                </small>
+              </Form.Group>
+
+              <Form.Group className="mb-3">
+                <Form.Label>Link Footer (Optional)</Form.Label>
+                <Form.Control
+                  type="text"
+                  placeholder="https://example.com or paste your link"
+                  value={form.link}
+                  onChange={(event) =>
+                    setForm((prev) => ({ ...prev, link: event.target.value }))
+                  }
+                />
+                <small className="text-secondary d-block mt-1">
+                  This link will be appended as a footer to the message
                 </small>
               </Form.Group>
 

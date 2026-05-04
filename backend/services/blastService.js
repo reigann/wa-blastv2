@@ -72,7 +72,7 @@ function processTemplate(message, contact) {
   return output;
 }
 
-async function startBlast(sessionId, contacts, message, delayMin, delayMax, mediaPath = null, username = 'default', banditPolicyId = null) {
+async function startBlast(sessionId, contacts, message, delayMin, delayMax, mediaPath = null, username = 'default', banditPolicyId = null, link = null) {
   if (activeBlasts.get(username)) {
     throw new Error('A blast is already in progress');
   }
@@ -83,10 +83,11 @@ async function startBlast(sessionId, contacts, message, delayMin, delayMax, medi
   const minDelay = Math.max(parseInt(delayMin) || 3000, 1000); // Min 1 second
   const maxDelay = Math.max(parseInt(delayMax) || 7000, minDelay); // Max at least same as min
 
-  // Update session status
+  // Update session status with current local time
+  const now = new Date().toISOString();
   db.prepare(`
-    UPDATE blast_sessions SET status='running', started_at=CURRENT_TIMESTAMP WHERE id=?
-  `).run(sessionId);
+    UPDATE blast_sessions SET status='running', started_at=? WHERE id=?
+  `).run(now, sessionId);
 
   emitToUser(username, 'blast:started', { sessionId, total: contacts.length });
 
@@ -104,7 +105,13 @@ async function startBlast(sessionId, contacts, message, delayMin, delayMax, medi
     }
 
     const contact = contacts[i];
-    const personalizedMessage = processTemplate(message, contact);
+    let personalizedMessage = processTemplate(message, contact);
+    
+    // Append link as footer if provided
+    if (link && link.trim()) {
+      personalizedMessage += `\n\n${link}`;
+    }
+    
     let retries = 0;
     let messageSent = false;
     let lastError = null;
@@ -148,9 +155,10 @@ async function startBlast(sessionId, contacts, message, delayMin, delayMax, medi
         sent++;
         messageSent = true;
 
+        const logTime = new Date().toISOString();
         db.prepare(`
-          INSERT INTO blast_logs (session_id, phone, name, status) VALUES (?, ?, ?, 'sent')
-        `).run(sessionId, contact.phone, contact.name);
+          INSERT INTO blast_logs (session_id, phone, name, status, sent_at) VALUES (?, ?, ?, 'sent', ?)
+        `).run(sessionId, contact.phone, contact.name, logTime);
 
         // notify bandit that message was sent (reward will be provided later via /api/bandit/feedback)
         if (banditEventId) {
@@ -204,9 +212,10 @@ async function startBlast(sessionId, contacts, message, delayMin, delayMax, medi
         failed++;
         messageSent = true; // Exit retry loop
 
+        const failedLogTime = new Date().toISOString();
         db.prepare(`
-          INSERT INTO blast_logs (session_id, phone, name, status, error_message) VALUES (?, ?, ?, 'failed', ?)
-        `).run(sessionId, contact.phone, contact.name, err.message);
+          INSERT INTO blast_logs (session_id, phone, name, status, error_message, sent_at) VALUES (?, ?, ?, 'failed', ?, ?)
+        `).run(sessionId, contact.phone, contact.name, err.message, failedLogTime);
 
         emitToUser(username, 'blast:progress', {
           sessionId,
@@ -238,9 +247,10 @@ async function startBlast(sessionId, contacts, message, delayMin, delayMax, medi
   }
 
   // Mark session as completed
+  const completedTime = new Date().toISOString();
   db.prepare(`
-    UPDATE blast_sessions SET status='completed', completed_at=CURRENT_TIMESTAMP WHERE id=?
-  `).run(sessionId);
+    UPDATE blast_sessions SET status='completed', completed_at=? WHERE id=?
+  `).run(completedTime, sessionId);
 
   // After completing, check queue for next session and start it if present
   try {
@@ -263,9 +273,10 @@ async function startBlast(sessionId, contacts, message, delayMin, delayMax, medi
       }
 
       // Update session status to running and start
-      db.prepare(`UPDATE blast_sessions SET status='running', started_at=CURRENT_TIMESTAMP WHERE id=?`).run(nextRow.session_id);
+      const startedTime = new Date().toISOString();
+      db.prepare(`UPDATE blast_sessions SET status='running', started_at=? WHERE id=?`).run(startedTime, nextRow.session_id);
       // Start next blast asynchronously
-      startBlast(nextRow.session_id, nextContacts, db.prepare('SELECT message FROM blast_sessions WHERE id=?').get(nextRow.session_id).message, payload.delay_min, payload.delay_max, payload.mediaPath || null, payload.username || 'default', payload.bandit_policy_id).catch(console.error);
+      startBlast(nextRow.session_id, nextContacts, db.prepare('SELECT message FROM blast_sessions WHERE id=?').get(nextRow.session_id).message, payload.delay_min, payload.delay_max, payload.mediaPath || null, payload.username || 'default', payload.bandit_policy_id, payload.link || null).catch(console.error);
     }
   } catch (err) {
     console.error('Failed to process blast queue:', err);
@@ -292,9 +303,10 @@ function cancelBlast(username = 'default') {
     activeBlast.cancelled = true;
     
     // Langsung update database status ke cancelled
+    const cancelledTime = new Date().toISOString();
     db.prepare(`
-      UPDATE blast_sessions SET status='cancelled', completed_at=CURRENT_TIMESTAMP WHERE id=?
-    `).run(sessionId);
+      UPDATE blast_sessions SET status='cancelled', completed_at=? WHERE id=?
+    `).run(cancelledTime, sessionId);
     
     // Emit event ke frontend
     if (io) {
@@ -370,10 +382,11 @@ function scheduleSession(sessionId, payload, scheduledAt) {
       const message = sessionRow ? sessionRow.message : '';
 
       // mark session running
-      db.prepare(`UPDATE blast_sessions SET status='running', started_at=CURRENT_TIMESTAMP WHERE id=?`).run(sessionId);
+      const scheduledStartTime = new Date().toISOString();
+      db.prepare(`UPDATE blast_sessions SET status='running', started_at=? WHERE id=?`).run(scheduledStartTime, sessionId);
 
       // start blast async
-      startBlast(sessionId, contacts, message, payloadObj.delay_min, payloadObj.delay_max, payloadObj.mediaPath || null, payloadObj.username || 'default', payloadObj.bandit_policy_id).catch(console.error);
+      startBlast(sessionId, contacts, message, payloadObj.delay_min, payloadObj.delay_max, payloadObj.mediaPath || null, payloadObj.username || 'default', payloadObj.bandit_policy_id, payloadObj.link || null).catch(console.error);
     } catch (err) {
       console.error('Error executing scheduled session:', err?.message || err);
     }

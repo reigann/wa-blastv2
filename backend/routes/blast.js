@@ -45,7 +45,7 @@ router.get('/sessions/:id/logs', (req, res) => {
 // POST /api/blast/start
 router.post('/start', upload.single('media'), async (req, res) => {
   const username = req.auth?.username || 'default';
-  const { name, message, contact_ids, group_name, delay_min, delay_max, template_media_path, bandit_policy_id, schedule_at } = req.body;
+  const { name, message, contact_ids, group_name, delay_min, delay_max, template_media_path, bandit_policy_id, schedule_at, link } = req.body;
   // Normalize schedule_at to an ISO UTC string when provided (frontend sends local datetime-local)
   let scheduledAt = null;
   if (schedule_at) {
@@ -92,7 +92,7 @@ router.post('/start', upload.single('media'), async (req, res) => {
 
   const sessionId = session.lastInsertRowid;
 
-  const payloadObj = { contact_ids: contact_ids || null, group_name: group_name || null, delay_min, delay_max, mediaPath, username, bandit_policy_id };
+  const payloadObj = { contact_ids: contact_ids || null, group_name: group_name || null, delay_min, delay_max, mediaPath, username, bandit_policy_id, link };
 
   // If scheduled in the future, persist payload and schedule it, then return
   if (scheduledAt) {
@@ -116,7 +116,7 @@ router.post('/start', upload.single('media'), async (req, res) => {
   }
 
   // Start blast asynchronously (immediate)
-  startBlast(sessionId, contacts, message, delay_min, delay_max, mediaPath, username, bandit_policy_id).catch(console.error);
+  startBlast(sessionId, contacts, message, delay_min, delay_max, mediaPath, username, bandit_policy_id, link).catch(console.error);
 
   res.json({ success: true, sessionId, total: contacts.length, hasMedia: !!mediaPath });
 });

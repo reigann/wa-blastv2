@@ -1,0 +1,12 @@
+# WhatsApp Blaster - Python Dependencies
+# Install with: pip install -r requirements.txt
+
+# Core Scientific Stack
+numpy==1.24.3
+pandas==2.0.3
+
+# Machine Learning - for Clustering
+scikit-learn==1.3.0
+
+# Optional: For advanced data processing
+scipy==1.11.2

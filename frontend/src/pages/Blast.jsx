@@ -134,6 +134,7 @@ export default function Blast() {
         name: sessionName,
         message: selectedTemplate.content,
         template_media_path: selectedTemplate.media_path || undefined,
+        link: selectedTemplate.link || undefined,
         delay_min: Number(delay),
         delay_max: Number(delay + 1500),
         group_name: filterGroup === 'all' ? contacts[0]?.group_name || 'default' : filterGroup,
@@ -303,6 +304,12 @@ export default function Blast() {
                                   <span>Has attachment</span>
                                 </div>
                               ) : null}
+                              {template.link ? (
+                                <div className="small mt-2 text-primary d-flex align-items-center gap-2">
+                                  <i className="bi bi-link-45deg" />
+                                  <span>Has link footer</span>
+                                </div>
+                              ) : null}
                             </Card.Body>
                           </Card>
                         </Col>
@@ -400,6 +407,11 @@ export default function Blast() {
                                   <span>{selectedTemplate.media_name || 'Document attachment'}</span>
                                 </div>
                               )}
+                            </div>
+                          ) : null}
+                          {selectedTemplate?.link ? (
+                            <div className="mt-3 border-top pt-2 text-primary" style={{ fontSize: '0.85em', wordBreak: 'break-all' }}>
+                              {selectedTemplate.link}
                             </div>
                           ) : null}
                         </div>

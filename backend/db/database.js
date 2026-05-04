@@ -136,6 +136,7 @@ addColumnIfMissing('templates', 'media_path', 'media_path TEXT');
 addColumnIfMissing('templates', 'media_type', 'media_type TEXT');
 addColumnIfMissing('templates', 'media_name', 'media_name TEXT');
 addColumnIfMissing('templates', 'updated_at', 'updated_at DATETIME');
+addColumnIfMissing('templates', 'link', 'link TEXT');
 
 // Ensure bandit_events has phone column for backward compatibility
 addColumnIfMissing('bandit_events', 'phone', 'phone TEXT');

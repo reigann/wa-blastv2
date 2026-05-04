@@ -209,8 +209,8 @@ export default function Sessions() {
                     </div>
 
                     <div className="d-flex justify-content-between align-items-center small text-secondary mb-2">
-                      <span>Last active</span>
-                      <span>{new Date(session.updated_at || session.created_at).toLocaleString()}</span>
+                      <span>Blast Started</span>
+                      <span>{new Date(session.started_at || session.created_at).toLocaleString()}</span>
                     </div>
 
                     <div className="d-flex gap-2 mt-3">

@@ -1,0 +1,89 @@
+# WhatsApp Blaster - Installation Instructions
+
+## QUICK INSTALL (Choose One)
+
+### Option 1: Windows (Fastest)
+1. Open this folder in Command Prompt
+2. Run: setup.bat
+3. Wait for completion
+4. Done! Go to "RUNNING" section below
+
+### Option 2: macOS/Linux
+1. Open terminal in this folder
+2. Run: chmod +x setup.sh && ./setup.sh
+3. Wait for completion
+4. Done! Go to "RUNNING" section below
+
+### Option 3: Manual Install
+Follow COMPLETE_SETUP.md
+
+---
+
+## PREREQUISITES (Must Install First)
+
+- Node.js v18+: https://nodejs.org/
+- Python 3.8+: https://www.python.org/
+- Chrome Browser: https://www.google.com/chrome/
+
+Verify:
+  node --version
+  python --version
+
+---
+
+## RUNNING THE PROJECT
+
+After setup completes:
+
+### Terminal 1 - Backend
+cd backend
+npm start
+
+Expected: "✅ Server running on http://localhost:3001"
+
+### Terminal 2 - Frontend (Open new terminal)
+cd frontend
+npm run dev
+
+Expected: "➜ Local: http://localhost:5173/"
+
+### Browser
+Open: http://localhost:5173
+
+---
+
+## DOCUMENTATION
+
+- QUICK_START.md: Fast setup guide
+- COMPLETE_SETUP.md: Detailed setup with troubleshooting
+- AVAILABLE_COMMANDS.md: All npm/python commands
+- VERIFICATION_CHECKLIST.md: Check if everything works
+- SETUP_GUIDE.md: Navigation & index
+
+---
+
+## FILES CREATED
+
+setup.bat           - Automated Windows installer
+setup.sh            - Automated Mac/Linux installer
+requirements.txt    - Python packages list
+
+---
+
+## PORT INFO
+
+Backend: http://localhost:3001
+Frontend: http://localhost:5173
+Database: backend/db/blaster.db
+
+---
+
+## ISSUES?
+
+Check COMPLETE_SETUP.md Troubleshooting section
+
+---
+
+START: Read QUICK_START.md or run setup.bat/setup.sh
+
+Have fun! 🚀

@@ -67,13 +67,14 @@ router.get('/', (req, res) => {
   if (columns.includes('media_type')) selectColumns.push('media_type');
   if (columns.includes('media_name')) selectColumns.push('media_name');
   if (columns.includes('updated_at')) selectColumns.push('updated_at');
+  if (columns.includes('link')) selectColumns.push('link');
 
   const sql = `SELECT ${selectColumns.join(', ')} FROM templates ORDER BY created_at DESC`;
   res.json(db.prepare(sql).all());
 });
 
 router.post('/', upload.single('attachment'), (req, res) => {
-  const { name, content, category } = req.body;
+  const { name, content, category, link } = req.body;
   if (!name || !content) {
     return res.status(400).json({ error: 'Name and content required' });
   }
@@ -83,19 +84,19 @@ router.post('/', upload.single('attachment'), (req, res) => {
   const mediaName = req.file ? req.file.originalname : null;
 
   const sql = `
-    INSERT INTO templates (name, content, category, media_path, media_type, media_name)
-    VALUES (?, ?, ?, ?, ?, ?)
+    INSERT INTO templates (name, content, category, link, media_path, media_type, media_name)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
   `;
 
   const result = db
     .prepare(sql)
-    .run(name, content, category || 'General', mediaPath, mediaType, mediaName);
+    .run(name, content, category || 'General', link || null, mediaPath, mediaType, mediaName);
 
   res.json({ success: true, id: result.lastInsertRowid });
 });
 
 router.put('/:id', upload.single('attachment'), (req, res) => {
-  const { name, content, category, remove_media } = req.body;
+  const { name, content, category, link, remove_media } = req.body;
   const columns = getTemplateColumnNames();
   const existing = db.prepare('SELECT * FROM templates WHERE id=?').get(req.params.id);
 
@@ -127,13 +128,14 @@ router.put('/:id', upload.single('attachment'), (req, res) => {
   if (columns.includes('updated_at')) {
     const sql = `
       UPDATE templates
-      SET name=?, content=?, category=?, media_path=?, media_type=?, media_name=?, updated_at=CURRENT_TIMESTAMP
+      SET name=?, content=?, category=?, link=?, media_path=?, media_type=?, media_name=?, updated_at=CURRENT_TIMESTAMP
       WHERE id=?
     `;
     db.prepare(sql).run(
       name || existing.name,
       content || existing.content,
       category || existing.category || 'General',
+      link !== undefined ? link : existing.link,
       mediaPath,
       mediaType,
       mediaName,
@@ -142,13 +144,14 @@ router.put('/:id', upload.single('attachment'), (req, res) => {
   } else {
     const sql = `
       UPDATE templates
-      SET name=?, content=?, category=?, media_path=?, media_type=?, media_name=?
+      SET name=?, content=?, category=?, link=?, media_path=?, media_type=?, media_name=?
       WHERE id=?
     `;
     db.prepare(sql).run(
       name || existing.name,
       content || existing.content,
       category || existing.category || 'General',
+      link !== undefined ? link : existing.link,
       mediaPath,
       mediaType,
       mediaName,
