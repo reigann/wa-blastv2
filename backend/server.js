@@ -5,8 +5,8 @@ const { Server } = require('socket.io');
 const cors = require('cors');
 const path = require('path');
 
-const { ensureWhatsAppClient, getStatus, initWhatsApp, roomForUser } = require('./services/whatsappService');
-const { setIO } = require('./services/blastService');
+const { ensureWhatsAppClient, getStatus, initWhatsApp, roomForUser, destroyAllClients } = require('./services/whatsappService');
+const { setIO, initScheduledSessions } = require('./services/blastService');
 const { requireAuth } = require('./middleware/auth');
 const { getSession } = require('./services/appAuth');
 
@@ -17,6 +17,25 @@ const templateRoutes = require('./routes/templates');
 const clusteringRoutes = require('./routes/clustering');
 const banditRoutes = require('./routes/bandit');
 const banditWorker = require('./services/banditWorker');
+
+process.on('unhandledRejection', (reason, p) => {
+  console.error('Unhandled Rejection at:', p, 'reason:', reason);
+  try {
+    destroyAllClients().catch(err => console.error('Error during destroyAllClients:', err));
+  } catch (err) {
+    console.error('Error scheduling destroyAllClients:', err);
+  }
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught Exception thrown:', err);
+  try {
+    destroyAllClients().catch(e => console.error('Error during destroyAllClients:', e));
+  } catch (e) {
+    console.error('Error scheduling destroyAllClients:', e);
+  }
+  // Don't exit here; allow nodemon to manage restarts if desired
+});
 
 const app = express();
 const httpServer = http.createServer(app);
@@ -83,6 +102,8 @@ io.on('connection', (socket) => {
 // Initialize socket reference for WhatsApp service
 setIO(io);
 initWhatsApp(io);
+// Initialize any sessions that were scheduled while server was down
+initScheduledSessions().catch(err => console.error('Failed to init scheduled sessions:', err));
 // start bandit background worker (if enabled)
 banditWorker.start();
 

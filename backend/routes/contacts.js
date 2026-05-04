@@ -208,6 +208,158 @@ router.post('/upload', upload.single('file'), (req, res) => {
   });
 });
 
+// POST /api/contacts/upload/preview — parse CSV and return rows for preview (no DB write)
+router.post('/upload/preview', upload.single('file'), (req, res) => {
+  const results = [];
+  const group_name = req.body.group_name || 'default';
+  const filePath = req.file.path;
+
+  fs.readFile(filePath, 'utf8', (err, data) => {
+    if (err) return res.status(500).json({ error: err.message });
+
+    const firstLine = data.split('\n')[0];
+    const delimiter = firstLine.includes('\t') ? '\t' : ',';
+
+    const options = {
+      delimiter: delimiter,
+      headers: true,
+      mapHeaders: ({ header, index }) => header.trim()
+    };
+
+    fs.createReadStream(filePath)
+      .pipe(csv(options))
+      .on('data', (data) => results.push(data))
+      .on('end', () => {
+        if (results.length === 0) {
+          fs.unlinkSync(filePath);
+          return res.status(400).json({ error: 'File CSV kosong' });
+        }
+
+        const firstRow = results[0];
+        const headers = Object.keys(firstRow);
+
+        // SMART COLUMN DETECTION (same as upload)
+        let phoneCol = null;
+        let nameCol = null;
+        let groupCol = null;
+        let prodiCol = null;
+        let sekolahCol = null;
+
+        for (const h of headers) {
+          const lower = h.toLowerCase();
+          if (!phoneCol && /^phone$|^nomor$|^no$|^hp$|^telepon$|^whatsapp$|^wa$|^nomor_wa/.test(lower)) phoneCol = h;
+          if (!nameCol && /^nama$|^name$|^nama_kontak$|^nama_siswa$|^contact_name$|^fullname/.test(lower)) nameCol = h;
+          if (!groupCol && /^group$|^group_name$|^kelompok$|^gelombang$|^kelas$|^grup$/.test(lower)) groupCol = h;
+          if (!prodiCol && /^prodi$|^minat_prodi$|^program_studi$|^jurusan$|^program/.test(lower)) prodiCol = h;
+          if (!sekolahCol && /^sekolah$|^asal_sekolah$|^sekolah_asal$|^instansi$|^asal$/.test(lower)) sekolahCol = h;
+        }
+
+        if (!phoneCol) {
+          phoneCol = headers.find(h => h.toLowerCase().includes('phone') || h.toLowerCase().includes('nomor'));
+        }
+        if (!nameCol) {
+          nameCol = headers.find(h => h.toLowerCase().includes('nama') || h.toLowerCase().includes('name'));
+        }
+        if (!groupCol) {
+          groupCol = headers.find(h => h.toLowerCase().includes('group') || h.toLowerCase().includes('kelompok'));
+        }
+        if (!prodiCol) {
+          prodiCol = headers.find(h => h.toLowerCase().includes('prodi') || h.toLowerCase().includes('program'));
+        }
+        if (!sekolahCol) {
+          sekolahCol = headers.find(h => h.toLowerCase().includes('sekolah') || h.toLowerCase().includes('asal'));
+        }
+
+        if (!phoneCol) phoneCol = headers[1] || headers[0];
+        if (!nameCol) nameCol = headers[0] || headers[1];
+        if (!groupCol) groupCol = headers[2] || headers[3];
+        if (!prodiCol) prodiCol = headers[2];
+        if (!sekolahCol) sekolahCol = headers[3];
+
+        const normalized = results.map((c, idx) => {
+          let phone = (c[phoneCol] || '').toString().trim();
+          phone = phone.replace(/[^\d+]/g, '');
+          if (!phone.startsWith('+') && phone.length > 8) phone = '+' + phone;
+
+          let name = (c[nameCol] || '').toString().trim();
+          if (!name) name = `Contact_${phone.slice(-4)}`;
+
+          const minat_prodi = (c[prodiCol] || 'Teknik Informatika').toString().trim();
+          const asal_sekolah = (c[sekolahCol] || 'unknown').toString().trim();
+
+          return {
+            __idx: idx,
+            name,
+            phone,
+            minat_prodi,
+            asal_sekolah,
+            original: c
+          };
+        });
+
+        // limit preview size to first 500 rows to avoid huge payloads
+        const previewRows = normalized.slice(0, 500);
+        fs.unlinkSync(filePath);
+        res.json({
+          success: true,
+          total: normalized.length,
+          rows: previewRows,
+          detected: {
+            nameColumn: nameCol,
+            phoneColumn: phoneCol,
+            prodiColumn: prodiCol,
+            sekolahColumn: sekolahCol,
+            allHeaders: headers
+          },
+          group_name
+        });
+      })
+      .on('error', (err) => {
+        fs.unlinkSync(filePath);
+        res.status(400).json({ error: 'CSV parsing failed: ' + err.message });
+      });
+  });
+});
+
+// POST /api/contacts/import — import array of parsed rows (from preview)
+router.post('/import', express.json(), (req, res) => {
+  const { rows, group_name } = req.body;
+  if (!rows || !Array.isArray(rows) || rows.length === 0) {
+    return res.status(400).json({ error: 'No rows provided for import' });
+  }
+
+  let imported = 0;
+  let skipped = 0;
+  try {
+    const insert = db.prepare(
+      'INSERT OR IGNORE INTO contacts (name, phone, group_name, minat_prodi, asal_sekolah) VALUES (?, ?, ?, ?, ?)'
+    );
+
+    const insertMany = db.transaction((contacts) => {
+      for (const c of contacts) {
+        let phone = (c.phone || '').toString().trim();
+        if (!phone) { skipped++; continue; }
+        phone = phone.replace(/[^\d+]/g, '');
+        if (!phone.startsWith('+') && phone.length > 8) phone = '+' + phone;
+
+        let name = (c.name || '').toString().trim();
+        if (!name) name = `Contact_${phone.slice(-4)}`;
+
+        const minat_prodi = (c.minat_prodi || 'Teknik Informatika').toString().trim();
+        const asal_sekolah = (c.asal_sekolah || 'unknown').toString().trim();
+
+        const r = insert.run(name, phone, group_name || 'default', minat_prodi, asal_sekolah);
+        r.changes ? imported++ : skipped++;
+      }
+    });
+
+    insertMany(rows);
+    res.json({ success: true, imported, skipped, total: rows.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // DELETE /api/contacts/:id
 router.delete('/:id', (req, res) => {
   db.prepare('DELETE FROM contacts WHERE id=?').run(req.params.id);

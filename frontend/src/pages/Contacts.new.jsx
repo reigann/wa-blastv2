@@ -15,6 +15,11 @@ export default function Contacts() {
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(false);
   const fileRef = useRef();
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewRows, setPreviewRows] = useState([]);
+  const [previewTotal, setPreviewTotal] = useState(0);
+  const [previewGroup, setPreviewGroup] = useState('default');
+  const [previewDetected, setPreviewDetected] = useState(null);
 
   const { control, handleSubmit, reset, formState: { errors, isSubmitting } } = useForm({
     defaultValues: { name: '', phone: '', email: '', group: 'default' },
@@ -102,18 +107,57 @@ export default function Contacts() {
     formData.append('file', file);
     formData.append('group_name', group);
 
+    setPreviewGroup(group);
     toast.promise(
-      contactsAPI.uploadCSV(formData).then(r => {
-        loadContacts();
-        loadGroups();
+      contactsAPI.previewUpload(formData).then(r => {
+        const rows = (r.data.rows || []).map((row) => ({ ...row, selected: true }));
+        setPreviewRows(rows);
+        setPreviewTotal(r.data.total || rows.length);
+        setPreviewDetected(r.data.detected || null);
+        setPreviewOpen(true);
         return r.data;
       }),
       {
-        loading: 'Mengupload CSV...',
-        success: d => `Berhasil import ${d.imported} kontak (${d.skipped} skip)`,
-        error: 'Gagal upload'
+        loading: 'Mempersiapkan preview CSV...',
+        success: () => 'Preview siap',
+        error: 'Gagal membuat preview'
       }
     );
+  }
+
+  function updatePreviewRow(idx, field, value) {
+    setPreviewRows(prev => prev.map(r => r.__idx === idx ? { ...r, [field]: value } : r));
+  }
+
+  async function importPreviewSelected() {
+    const toImport = previewRows.filter(r => r.selected).map(r => ({
+      name: r.name,
+      phone: r.phone,
+      minat_prodi: r.minat_prodi,
+      asal_sekolah: r.asal_sekolah
+    }));
+
+    if (toImport.length === 0) {
+      toast.error('Tidak ada baris yang dipilih untuk diimpor');
+      return;
+    }
+
+    try {
+      await toast.promise(
+        contactsAPI.importContacts({ rows: toImport, group_name: previewGroup }),
+        {
+          loading: 'Mengimpor kontak...',
+          success: d => `Berhasil import ${d.data.imported} kontak (${d.data.skipped} skipped)`,
+          error: 'Import gagal'
+        }
+      );
+      setPreviewOpen(false);
+      setPreviewRows([]);
+      loadContacts();
+      loadGroups();
+    } catch (err) {
+      console.error(err);
+    }
   }
 
   async function exportCSV() {
@@ -386,6 +430,64 @@ export default function Contacts() {
           <Button variant="primary" onClick={handleSubmit(onSubmitAdd)} disabled={isSubmitting}>
             {isSubmitting ? <><Spinner size="sm" className="me-2" />Loading...</> : 'Tambahkan Kontak'}
           </Button>
+        </Modal.Footer>
+      </Modal>
+      {/* Preview CSV Modal */}
+      <Modal show={previewOpen} onHide={() => setPreviewOpen(false)} size="lg" centered scrollable>
+        <Modal.Header closeButton>
+          <Modal.Title>Preview CSV — Menampilkan {previewRows.length} dari {previewTotal} baris</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          {previewDetected && (
+            <div className="mb-3 text-muted">Deteksi kolom: {previewDetected.nameColumn}, {previewDetected.phoneColumn}</div>
+          )}
+
+          <div className="table-responsive" style={{ maxHeight: '50vh', overflow: 'auto' }}>
+            <Table size="sm" bordered>
+              <thead>
+                <tr>
+                  <th style={{ width: 36 }}>
+                    <Form.Check
+                      checked={previewRows.length > 0 && previewRows.every(r => r.selected)}
+                      onChange={(e) => setPreviewRows(prev => prev.map(r => ({ ...r, selected: e.target.checked })))}
+                    />
+                  </th>
+                  <th>Nama</th>
+                  <th>Nomor</th>
+                  <th>Minat / Prodi</th>
+                  <th>Asal Sekolah</th>
+                </tr>
+              </thead>
+              <tbody>
+                {previewRows.map((r) => (
+                  <tr key={r.__idx}>
+                    <td>
+                      <Form.Check
+                        checked={!!r.selected}
+                        onChange={(e) => setPreviewRows(prev => prev.map(it => it.__idx === r.__idx ? { ...it, selected: e.target.checked } : it))}
+                      />
+                    </td>
+                    <td>
+                      <Form.Control size="sm" value={r.name} onChange={(e) => updatePreviewRow(r.__idx, 'name', e.target.value)} />
+                    </td>
+                    <td>
+                      <Form.Control size="sm" value={r.phone} onChange={(e) => updatePreviewRow(r.__idx, 'phone', e.target.value)} />
+                    </td>
+                    <td>
+                      <Form.Control size="sm" value={r.minat_prodi} onChange={(e) => updatePreviewRow(r.__idx, 'minat_prodi', e.target.value)} />
+                    </td>
+                    <td>
+                      <Form.Control size="sm" value={r.asal_sekolah} onChange={(e) => updatePreviewRow(r.__idx, 'asal_sekolah', e.target.value)} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </Table>
+          </div>
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="secondary" onClick={() => setPreviewOpen(false)}>Batal</Button>
+          <Button variant="primary" onClick={importPreviewSelected}>Impor yang Dipilih ({previewRows.filter(r => r.selected).length})</Button>
         </Modal.Footer>
       </Modal>
     </Container>

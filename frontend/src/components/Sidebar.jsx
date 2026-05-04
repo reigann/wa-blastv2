@@ -40,7 +40,7 @@ export default function Sidebar({ mobileOpen, closeMobile, collapsed, setCollaps
             <i className="bi bi-whatsapp" />
           </span>
           <div className="logo-label">
-            <div className="fw-semibold text-white">WA Blaster</div>
+            <div className="fw-semibold text-white">WA Blaster UPJ</div>
             <div className="small text-white-50">Broadcast Center</div>
           </div>
         </div>

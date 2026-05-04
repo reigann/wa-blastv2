@@ -5,6 +5,7 @@ const banditService = require('./banditService');
 
 const activeBlasts = new Map();
 let io = null;
+const scheduledTimers = new Map();
 
 // Configuration
 const SEND_MESSAGE_TIMEOUT = 30000; // 30 seconds timeout per message
@@ -243,7 +244,7 @@ async function startBlast(sessionId, contacts, message, delayMin, delayMax, medi
 
   // After completing, check queue for next session and start it if present
   try {
-    const nextRow = db.prepare(`SELECT session_id, payload FROM blast_queue ORDER BY queued_at LIMIT 1`).get();
+    const nextRow = db.prepare(`SELECT q.session_id, q.payload FROM blast_queue q LEFT JOIN blast_sessions s ON s.id=q.session_id WHERE s.scheduled_at IS NULL OR s.scheduled_at <= CURRENT_TIMESTAMP ORDER BY q.queued_at LIMIT 1`).get();
     if (nextRow) {
       // Remove from queue
       db.prepare(`DELETE FROM blast_queue WHERE session_id=?`).run(nextRow.session_id);
@@ -311,4 +312,91 @@ function getActiveBlast(username = 'default') {
   return activeBlasts.get(username) || null;
 }
 
-module.exports = { startBlast, cancelBlast, getActiveBlast, setIO };
+function scheduleSession(sessionId, payload, scheduledAt) {
+  // Clear existing timer if present
+  if (scheduledTimers.has(sessionId)) {
+    clearTimeout(scheduledTimers.get(sessionId));
+    scheduledTimers.delete(sessionId);
+  }
+
+  const when = new Date(scheduledAt).getTime();
+  let delay = when - Date.now();
+  if (isNaN(when) || delay < 0) delay = 0;
+
+  const t = setTimeout(async () => {
+    scheduledTimers.delete(sessionId);
+    try {
+      // If another blast is active for the user, enqueue instead
+      const db = require('../db/database');
+      // read persisted payload if present
+      let payloadObj = payload || {};
+      try {
+        const qrow = db.prepare('SELECT payload FROM blast_queue WHERE session_id=?').get(sessionId);
+        if (qrow && qrow.payload) {
+          payloadObj = JSON.parse(qrow.payload);
+        }
+      } catch (e) {
+        // ignore parse errors
+      }
+
+      const username = payloadObj.username || 'default';
+      if (getActiveBlast(username)) {
+        // mark as queued and leave payload in blast_queue for later processing
+        try {
+          db.prepare(`UPDATE blast_sessions SET status='queued' WHERE id=?`).run(sessionId);
+        } catch (err) {
+          console.error('Failed to mark scheduled session queued:', err?.message || err);
+        }
+        return;
+      }
+
+      // No active blast: remove payload from queue (if any) and start
+      try {
+        db.prepare('DELETE FROM blast_queue WHERE session_id=?').run(sessionId);
+      } catch (e) {
+        // ignore
+      }
+
+      // reconstruct contacts
+      let contacts = [];
+      if (payloadObj.contact_ids && payloadObj.contact_ids.length > 0) {
+        const placeholders = payloadObj.contact_ids.map(() => '?').join(',');
+        contacts = db.prepare(`SELECT * FROM contacts WHERE id IN (${placeholders})`).all(...payloadObj.contact_ids);
+      } else if (payloadObj.group_name) {
+        contacts = db.prepare('SELECT * FROM contacts WHERE group_name=?').all(payloadObj.group_name);
+      }
+
+      const sessionRow = db.prepare('SELECT message FROM blast_sessions WHERE id=?').get(sessionId);
+      const message = sessionRow ? sessionRow.message : '';
+
+      // mark session running
+      db.prepare(`UPDATE blast_sessions SET status='running', started_at=CURRENT_TIMESTAMP WHERE id=?`).run(sessionId);
+
+      // start blast async
+      startBlast(sessionId, contacts, message, payloadObj.delay_min, payloadObj.delay_max, payloadObj.mediaPath || null, payloadObj.username || 'default', payloadObj.bandit_policy_id).catch(console.error);
+    } catch (err) {
+      console.error('Error executing scheduled session:', err?.message || err);
+    }
+  }, delay);
+
+  scheduledTimers.set(sessionId, t);
+}
+
+async function initScheduledSessions() {
+  const db = require('../db/database');
+  try {
+    const rows = db.prepare(`SELECT id, scheduled_at FROM blast_sessions WHERE status='scheduled' AND scheduled_at IS NOT NULL`).all();
+    for (const r of rows) {
+      try {
+        scheduleSession(r.id, JSON.parse('{}'), r.scheduled_at);
+      } catch (err) {
+        // fallback: if scheduled_at is invalid, try to start immediately
+        console.error('Failed to schedule session on startup', r.id, err?.message || err);
+      }
+    }
+  } catch (err) {
+    console.error('Failed to initialize scheduled sessions:', err?.message || err);
+  }
+}
+
+module.exports = { startBlast, cancelBlast, getActiveBlast, setIO, scheduleSession, initScheduledSessions };

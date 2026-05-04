@@ -265,12 +265,15 @@ async function ensureWhatsAppClient(username) {
   try {
     await client.initialize();
   } catch (err) {
-    const message = err?.message || String(err);
+    const message = (err && err.message) ? String(err.message) : String(err);
+    const lower = message.toLowerCase();
     if (
-      message.includes('Execution context was destroyed') ||
-      message.includes('Target closed') ||
-      message.includes('Session closed') ||
-      message.includes('Navigation failed')
+      lower.includes('execution context was destroyed') ||
+      lower.includes('target closed') ||
+      lower.includes('session closed') ||
+      lower.includes('navigation failed') ||
+      lower.includes('detached frame') ||
+      lower.includes('attempted to use detached frame')
     ) {
       state.status = 'connecting';
       emitStatus(username);
@@ -393,6 +396,26 @@ async function logout(username) {
   emitStatus(username);
 }
 
+async function destroyAllClients() {
+  for (const [username, state] of userStates.entries()) {
+    try {
+      if (state.reconnectTimer) {
+        clearTimeout(state.reconnectTimer);
+        state.reconnectTimer = null;
+      }
+      if (state.client) {
+        await state.client.destroy();
+      }
+    } catch (err) {
+      // ignore cleanup errors
+    }
+    state.client = null;
+    state.qr = null;
+    state.status = 'disconnected';
+    emitStatus(username);
+  }
+}
+
 module.exports = {
   initWhatsApp: setSocketServer,
   setSocketServer,
@@ -404,4 +427,5 @@ module.exports = {
   logout,
   normalizePhone,
   roomForUser,
+  destroyAllClients,
 };

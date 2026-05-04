@@ -22,7 +22,7 @@ export default function NavbarComponent({ sidebarOpen, setSidebarOpen }) {
       <Container fluid>
         <Navbar.Brand href="/" className="fw-bold fs-5">
           <i className="bi bi-chat-dots-fill text-success me-2"></i>
-          WhatsApp Blaster
+          WhatsApp Blaster UPJ
         </Navbar.Brand>
 
         <div className="ms-auto d-flex align-items-center gap-3">

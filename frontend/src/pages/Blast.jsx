@@ -24,7 +24,14 @@ const listRowHeight = 52;
 const BACKEND_URL = 'http://localhost:3001';
 
 function toTimeValue(date) {
-  return new Date(date).toISOString().slice(0, 16);
+  const d = new Date(date);
+  const pad = (n) => String(n).padStart(2, '0');
+  const year = d.getFullYear();
+  const month = pad(d.getMonth() + 1);
+  const day = pad(d.getDate());
+  const hours = pad(d.getHours());
+  const minutes = pad(d.getMinutes());
+  return `${year}-${month}-${day}T${hours}:${minutes}`;
 }
 
 export default function Blast() {
@@ -87,7 +94,14 @@ export default function Blast() {
   const bottomPad = Math.max(0, (filteredContacts.length - end) * listRowHeight);
 
   function toggleContact(id) {
-    setSelectedContactIds((prev) => (prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]));
+    setSelectedContactIds((prev) => {
+      if (prev.includes(id)) return prev.filter((item) => item !== id);
+      if (prev.length >= 20) {
+        toast.error('Maksimal 20 kontak per blast');
+        return prev;
+      }
+      return [...prev, id];
+    });
   }
 
   function nextStep() {
@@ -109,6 +123,11 @@ export default function Blast() {
   async function startBlast() {
     if (!selectedTemplate || selectedContactIds.length === 0) return;
 
+    if (selectedContactIds.length > 20) {
+      toast.error('Maksimal 20 kontak per blast');
+      return;
+    }
+
     setSending(true);
     try {
       await blastAPI.start({
@@ -119,7 +138,7 @@ export default function Blast() {
         delay_max: Number(delay + 1500),
         group_name: filterGroup === 'all' ? contacts[0]?.group_name || 'default' : filterGroup,
         contact_ids: selectedContactIds,
-        schedule_at: scheduleEnabled ? scheduleAt : undefined,
+        schedule_at: scheduleEnabled ? new Date(scheduleAt).toISOString() : undefined,
       });
       toast.success('Blast started successfully');
       setCurrentStep(1);
@@ -174,13 +193,23 @@ export default function Blast() {
                   <div className="d-flex justify-content-between align-items-center mb-3">
                     <h3 className="mb-0">Select Contacts</h3>
                     <div className="d-flex align-items-center gap-2">
-                      <Form.Check type="checkbox" id="selectAll" label="Select all" checked={selectedContactIds.length === filteredContacts.length && filteredContacts.length>0} onChange={(e)=>{
-                        if (e.target.checked) {
-                          setSelectedContactIds(filteredContacts.map(c=>c.id));
-                        } else {
-                          setSelectedContactIds([]);
-                        }
-                      }} />
+                      <Form.Check
+                        type="checkbox"
+                        id="selectAll"
+                        label="Select all (maks 20)"
+                        checked={selectedContactIds.length > 0 && selectedContactIds.length === Math.min(filteredContacts.length, 20)}
+                        onChange={(e)=>{
+                          if (e.target.checked) {
+                            const limited = filteredContacts.slice(0, 20).map(c => c.id);
+                            setSelectedContactIds(limited);
+                            if (filteredContacts.length > 20) {
+                              toast.error('Terbatas: maksimal 20 kontak akan dipilih');
+                            }
+                          } else {
+                            setSelectedContactIds([]);
+                          }
+                        }}
+                      />
                       <Badge bg="success">{selectedContactIds.length} selected</Badge>
                     </div>
                   </div>
@@ -219,6 +248,7 @@ export default function Blast() {
                                 checked={selectedContactIds.includes(contact.id)}
                                 onChange={() => toggleContact(contact.id)}
                                 aria-label={`Select ${contact.name}`}
+                                disabled={!selectedContactIds.includes(contact.id) && selectedContactIds.length >= 20}
                               />
                             </td>
                             <td>

@@ -4,7 +4,7 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const db = require('../db/database');
-const { startBlast, cancelBlast, getActiveBlast } = require('../services/blastService');
+const { startBlast, cancelBlast, getActiveBlast, scheduleSession } = require('../services/blastService');
 
 // Setup multer untuk upload media
 const storage = multer.diskStorage({
@@ -45,7 +45,13 @@ router.get('/sessions/:id/logs', (req, res) => {
 // POST /api/blast/start
 router.post('/start', upload.single('media'), async (req, res) => {
   const username = req.auth?.username || 'default';
-  const { name, message, contact_ids, group_name, delay_min, delay_max, template_media_path, bandit_policy_id } = req.body;
+  const { name, message, contact_ids, group_name, delay_min, delay_max, template_media_path, bandit_policy_id, schedule_at } = req.body;
+  // Normalize schedule_at to an ISO UTC string when provided (frontend sends local datetime-local)
+  let scheduledAt = null;
+  if (schedule_at) {
+    const parsed = new Date(schedule_at);
+    scheduledAt = isNaN(parsed.getTime()) ? null : parsed.toISOString();
+  }
   let mediaPath = req.file ? path.resolve(req.file.path) : null;
 
   if (!mediaPath && template_media_path) {
@@ -59,15 +65,7 @@ router.post('/start', upload.single('media'), async (req, res) => {
   if (!message) return res.status(400).json({ error: 'Message is required' });
   if (!contact_ids && !group_name) return res.status(400).json({ error: 'Provide contact_ids or group_name' });
 
-  if (getActiveBlast(username)) {
-    // Queue the session payload and mark session as queued
-    const payload = JSON.stringify({ contact_ids: contact_ids || null, group_name: group_name || null, delay_min, delay_max, mediaPath, username, bandit_policy_id });
-    db.prepare(`INSERT INTO blast_queue (session_id, payload) VALUES (?, ?)`).run(sessionId, payload);
-    db.prepare(`UPDATE blast_sessions SET status='queued' WHERE id=?`).run(sessionId);
-    return res.json({ success: true, queued: true, sessionId, total: contacts ? contacts.length : undefined });
-  }
-
-  // Fetch contacts
+  // Fetch contacts to know total
   let contacts;
   if (contact_ids && contact_ids.length > 0) {
     const placeholders = contact_ids.map(() => '?').join(',');
@@ -80,15 +78,44 @@ router.post('/start', upload.single('media'), async (req, res) => {
     return res.status(400).json({ error: 'No contacts found' });
   }
 
-  // Create blast session
+  // Enforce maximum contacts per single blast to keep accounts safe
+  if (contacts.length > 20) {
+    return res.status(400).json({ error: 'Maksimal 20 kontak per blast' });
+  }
+
+  // Create blast session with scheduled_at if provided (stored as ISO UTC)
+  const status = scheduledAt ? 'scheduled' : 'pending';
   const session = db.prepare(`
-    INSERT INTO blast_sessions (name, message, total, status)
-    VALUES (?, ?, ?, 'pending')
-  `).run(name || `Blast ${new Date().toLocaleString()}`, message, contacts.length);
+    INSERT INTO blast_sessions (name, message, total, status, scheduled_at)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(name || `Blast ${new Date().toLocaleString()}`, message, contacts.length, status, scheduledAt || null);
 
   const sessionId = session.lastInsertRowid;
 
-  // Start blast asynchronously (dengan media path jika ada)
+  const payloadObj = { contact_ids: contact_ids || null, group_name: group_name || null, delay_min, delay_max, mediaPath, username, bandit_policy_id };
+
+  // If scheduled in the future, persist payload and schedule it, then return
+  if (scheduledAt) {
+    try {
+      // persist payload so scheduled session survives restarts
+      db.prepare(`INSERT OR REPLACE INTO blast_queue (session_id, payload) VALUES (?, ?)`).run(sessionId, JSON.stringify(payloadObj));
+      scheduleSession(sessionId, payloadObj, scheduledAt);
+      return res.json({ success: true, scheduled: true, sessionId, total: contacts.length });
+    } catch (err) {
+      console.error('Failed to schedule session:', err?.message || err);
+      return res.status(500).json({ error: 'Failed to schedule session' });
+    }
+  }
+
+  // If there's an active blast, queue the session
+  if (getActiveBlast(username)) {
+    const payload = JSON.stringify(payloadObj);
+    db.prepare(`INSERT OR REPLACE INTO blast_queue (session_id, payload) VALUES (?, ?)`).run(sessionId, payload);
+    db.prepare(`UPDATE blast_sessions SET status='queued' WHERE id=?`).run(sessionId);
+    return res.json({ success: true, queued: true, sessionId, total: contacts.length });
+  }
+
+  // Start blast asynchronously (immediate)
   startBlast(sessionId, contacts, message, delay_min, delay_max, mediaPath, username, bandit_policy_id).catch(console.error);
 
   res.json({ success: true, sessionId, total: contacts.length, hasMedia: !!mediaPath });

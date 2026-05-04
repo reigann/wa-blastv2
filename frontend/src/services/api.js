@@ -47,6 +47,8 @@ export const contactsAPI = {
   add: (data) => api.post('/contacts', data),
   update: (id, data) => api.put(`/contacts/${id}`, data),
   uploadCSV: (formData) => api.post('/contacts/upload', formData),
+  previewUpload: (formData) => api.post('/contacts/upload/preview', formData),
+  importContacts: (payload) => api.post('/contacts/import', payload),
   delete: (id) => api.delete(`/contacts/${id}`),
   deleteAll: (group) => api.delete('/contacts', { params: { group } })
 };
