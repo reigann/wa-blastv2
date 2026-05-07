@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { io } from 'socket.io-client';
 import { getAuthToken } from '../lib/auth';
+import { BACKEND_URL } from '../lib/config';
 
 export function useSocket() {
   const socketRef = useRef(null);
@@ -14,7 +15,7 @@ export function useSocket() {
     const token = getAuthToken();
     if (!token) return undefined;
 
-    socketRef.current = io('http://localhost:3001', {
+    socketRef.current = io(BACKEND_URL, {
       auth: { token },
       transports: ['websocket'],
     });

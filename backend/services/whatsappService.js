@@ -214,7 +214,12 @@ async function ensureWhatsAppClient(username) {
 
         // Find pending bandit events for this phone
         const rows = db.prepare('SELECT * FROM bandit_events WHERE phone = ? AND reward IS NULL ORDER BY created_at DESC').all(sender);
-        if (!rows || rows.length === 0) return;
+        if (!rows || rows.length === 0) {
+          console.log(`[Bandit] No pending events found for reply from: ${sender}`);
+          return;
+        }
+
+        console.log(`[Bandit] Found ${rows.length} pending events for reply from: ${sender}`);
 
         const windowHours = Number(process.env.BANDIT_FEEDBACK_WINDOW_HOURS) || 24;
         const now = Date.now();
@@ -224,7 +229,14 @@ async function ensureWhatsAppClient(username) {
           const hours = (now - created.getTime()) / (1000 * 60 * 60);
           if (hours <= windowHours) {
             try {
+              console.log(`[Bandit] Processing reply for event ${ev.id}`);
+              // Mark as replied
+              db.prepare(`UPDATE bandit_events SET reply_received = 1 WHERE id = ?`).run(ev.id);
+              console.log(`[Bandit] Event ${ev.id} marked as replied`);
+              
+              // Auto-apply reward for reply
               const res = await banditService.feedback(ev.id, 1);
+              console.log(`[Bandit] Event ${ev.id} auto-rewarded for reply`);
               if (io) io.to(roomForUser(username)).emit('bandit:auto_feedback', { eventId: ev.id, phone: sender, reward: 1, result: res });
             } catch (err) {
               console.error('bandit feedback error:', err?.message || err);
@@ -234,6 +246,55 @@ async function ensureWhatsAppClient(username) {
 
       } catch (err) {
         console.error('Auto-feedback listener error:', err?.message || err);
+      }
+    });
+
+    // Track message status changes (delivered, read) for bandit events
+    client.on('message_ack', async (msg, ack) => {
+      try {
+        if (!msg || !msg.to) return;
+        
+        // ack levels: 1=sent, 2=delivered, 3=read, 4=played (for audio/video)
+        const to = msg.to.replace('@c.us', '').replace('@g.us', '');
+        
+        console.log(`[Bandit] Message ACK - phone: ${to}, ack level: ${ack}`);
+        
+        // Find bandit events for this recipient - try multiple formats
+        let events = db.prepare('SELECT * FROM bandit_events WHERE phone LIKE ? ORDER BY created_at DESC LIMIT 5').all(`%${to}%`);
+        
+        if (events.length === 0) {
+          console.log(`[Bandit] No events found for phone: ${to}`);
+          return;
+        }
+        
+        console.log(`[Bandit] Found ${events.length} events for phone: ${to}`);
+        
+        for (const ev of events) {
+          console.log(`[Bandit] Updating event ${ev.id} - ack: ${ack}`);
+          
+          if (ack >= 2) {
+            // Delivered or better
+            db.prepare(`UPDATE bandit_events SET delivery_status = 'delivered' WHERE id = ?`).run(ev.id);
+            console.log(`[Bandit] Event ${ev.id} marked as delivered`);
+          }
+          if (ack >= 3) {
+            // Read or better
+            db.prepare(`UPDATE bandit_events SET read_status = 1 WHERE id = ?`).run(ev.id);
+            console.log(`[Bandit] Event ${ev.id} marked as read`);
+            
+            // Auto-apply reward for read
+            if (process.env.BANDIT_ENABLED === 'true') {
+              try {
+                await banditService.updateEventDeliveryStatus(ev.id, 'delivered', 1, 0);
+                console.log(`[Bandit] Event ${ev.id} auto-rewarded for read`);
+              } catch (err) {
+                console.warn('[Bandit] Failed to auto-reward read:', err?.message);
+              }
+            }
+          }
+        }
+      } catch (err) {
+        console.error('[Bandit] Message ack listener error:', err?.message || err);
       }
     });
   });

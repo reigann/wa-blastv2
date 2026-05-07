@@ -3,77 +3,114 @@ const router = express.Router();
 const multer = require('multer');
 const csv = require('csv-parser');
 const fs = require('fs');
-const db = require('../db/database');
+const { admin, getFirestore } = require('../services/firebaseAdmin');
 
 const upload = multer({ dest: 'uploads/' });
 
-// GET /api/contacts
-router.get('/', (req, res) => {
-  const { group } = req.query;
-  let contacts;
-  if (group) {
-    contacts = db.prepare('SELECT * FROM contacts WHERE group_name=? ORDER BY created_at DESC').all(group);
-  } else {
-    contacts = db.prepare('SELECT * FROM contacts ORDER BY created_at DESC').all();
-  }
-  res.json(contacts);
-});
+function normalizePhone(raw) {
+  let phone = String(raw || '').trim().replace(/[^\d+]/g, '');
+  if (phone && !phone.startsWith('+') && phone.length > 8) phone = '+' + phone;
+  return phone;
+}
 
-// GET /api/contacts/groups
-router.get('/groups', (req, res) => {
-  const groups = db.prepare('SELECT DISTINCT group_name, COUNT(*) as count FROM contacts GROUP BY group_name').all();
-  res.json(groups);
-});
+async function findByPhone(phone) {
+  const db = getFirestore();
+  const snap = await db.collection('contacts').where('phone', '==', phone).limit(1).get();
+  return snap.empty ? null : snap.docs[0];
+}
 
-// POST /api/contacts — add single contact
-router.post('/', (req, res) => {
-  const { name, phone, group_name, group, minat_prodi, asal_sekolah } = req.body;
-  if (!phone) return res.status(400).json({ error: 'Phone is required' });
-
+router.get('/', async (req, res) => {
   try {
-    const result = db.prepare(
-      'INSERT OR IGNORE INTO contacts (name, phone, group_name, minat_prodi, asal_sekolah) VALUES (?, ?, ?, ?, ?)'
-    ).run(
-      name, 
-      phone, 
-      group_name || group || 'default',
-      minat_prodi || 'Teknik Informatika',
-      asal_sekolah || 'unknown'
-    );
-    res.json({ success: true, id: result.lastInsertRowid });
+    const db = getFirestore();
+    const { group } = req.query;
+    let q = db.collection('contacts');
+    if (group) q = q.where('group_name', '==', group);
+
+    const snap = await q.get();
+    const contacts = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    contacts.sort((a, b) => {
+      const ta = a.created_at?.toMillis ? a.created_at.toMillis() : 0;
+      const tb = b.created_at?.toMillis ? b.created_at.toMillis() : 0;
+      return tb - ta;
+    });
+
+    res.json(contacts);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// PUT /api/contacts/:id — update single contact
-router.put('/:id', (req, res) => {
-  const { name, phone, group_name, group, minat_prodi, asal_sekolah } = req.body;
-  const existing = db.prepare('SELECT * FROM contacts WHERE id=?').get(req.params.id);
-  if (!existing) {
-    return res.status(404).json({ error: 'Contact not found' });
+router.get('/groups', async (req, res) => {
+  try {
+    const db = getFirestore();
+    const snap = await db.collection('contacts').get();
+    const counter = new Map();
+
+    for (const d of snap.docs) {
+      const g = d.data().group_name || 'default';
+      counter.set(g, (counter.get(g) || 0) + 1);
+    }
+
+    res.json(Array.from(counter.entries()).map(([group_name, count]) => ({ group_name, count })));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
+});
+
+router.post('/', async (req, res) => {
+  const { name, phone, group_name, group, minat_prodi, asal_sekolah } = req.body;
+  const normalizedPhone = normalizePhone(phone);
+  if (!normalizedPhone) return res.status(400).json({ error: 'Phone is required' });
 
   try {
-    db.prepare(`
-      UPDATE contacts
-      SET name=?, phone=?, group_name=?, minat_prodi=?, asal_sekolah=?
-      WHERE id=?
-    `).run(
-      name || existing.name,
-      phone || existing.phone,
-      group_name || group || existing.group_name || 'default',
-      minat_prodi || existing.minat_prodi || 'Teknik Informatika',
-      asal_sekolah || existing.asal_sekolah || 'unknown',
-      req.params.id,
-    );
+    const existing = await findByPhone(normalizedPhone);
+    if (existing) return res.json({ success: true, id: existing.id, skipped: true });
+
+    const db = getFirestore();
+    const now = admin.firestore.Timestamp.now();
+    const ref = await db.collection('contacts').add({
+      name: name || `Contact_${normalizedPhone.slice(-4)}`,
+      phone: normalizedPhone,
+      group_name: group_name || group || 'default',
+      minat_prodi: minat_prodi || 'Teknik Informatika',
+      asal_sekolah: asal_sekolah || 'unknown',
+      cluster_id: -1,
+      created_at: now,
+      updated_at: now,
+    });
+
+    res.json({ success: true, id: ref.id });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.put('/:id', async (req, res) => {
+  try {
+    const db = getFirestore();
+    const ref = db.collection('contacts').doc(req.params.id);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ error: 'Contact not found' });
+
+    const existing = doc.data();
+    const { name, phone, group_name, group, minat_prodi, asal_sekolah } = req.body;
+    const normalizedPhone = phone ? normalizePhone(phone) : existing.phone;
+
+    await ref.update({
+      name: name || existing.name,
+      phone: normalizedPhone,
+      group_name: group_name || group || existing.group_name || 'default',
+      minat_prodi: minat_prodi || existing.minat_prodi || 'Teknik Informatika',
+      asal_sekolah: asal_sekolah || existing.asal_sekolah || 'unknown',
+      updated_at: admin.firestore.Timestamp.now(),
+    });
+
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// POST /api/contacts/upload — upload CSV or TSV (ultra-smart auto-detect)
 router.post('/upload', upload.single('file'), (req, res) => {
   const results = [];
   const group_name = req.body.group_name || 'default';
@@ -82,133 +119,67 @@ router.post('/upload', upload.single('file'), (req, res) => {
   fs.readFile(filePath, 'utf8', (err, data) => {
     if (err) return res.status(500).json({ error: err.message });
 
-    const firstLine = data.split('\n')[0];
-    const delimiter = firstLine.includes('\t') ? '\t' : ',';
-    
-    const options = {
-      delimiter: delimiter,
-      headers: true,
-      // IMPORTANT: Don't lowercase headers to preserve "nama", "phone", etc.
-      mapHeaders: ({ header, index }) => header.trim()
-    };
+    const delimiter = data.split('\n')[0].includes('\t') ? '\t' : ',';
+    const options = { delimiter, headers: true, mapHeaders: ({ header }) => header.trim() };
 
     fs.createReadStream(filePath)
       .pipe(csv(options))
-      .on('data', (data) => results.push(data))
-      .on('end', () => {
+      .on('data', (row) => results.push(row))
+      .on('end', async () => {
         let imported = 0;
         let skipped = 0;
 
-        if (results.length === 0) {
-          return res.status(400).json({ error: 'File CSV kosong' });
-        }
+        if (!results.length) return res.status(400).json({ error: 'File CSV kosong' });
 
-        const firstRow = results[0];
-        const headers = Object.keys(firstRow);
-        
-        // Debug log
-        console.log('[UPLOAD] Headers detected:', headers);
-        console.log('[UPLOAD] First row:', firstRow);
+        const headers = Object.keys(results[0]);
+        const phoneCol = headers.find((h) => /phone|nomor/i.test(h)) || headers[1] || headers[0];
+        const nameCol = headers.find((h) => /nama|name/i.test(h)) || headers[0] || headers[1];
+        const prodiCol = headers.find((h) => /prodi|program/i.test(h)) || headers[2];
+        const sekolahCol = headers.find((h) => /sekolah|asal/i.test(h)) || headers[3];
 
-        // SMART COLUMN DETECTION
-        let phoneCol = null;
-        let nameCol = null;
-        let groupCol = null;
-        let prodiCol = null;
-        let sekolahCol = null;
-
-        // Strategy 1: Check header names (case-insensitive)
-        for (const h of headers) {
-          const lower = h.toLowerCase();
-          if (!phoneCol && /^phone$|^nomor$|^no$|^hp$|^telepon$|^whatsapp$|^wa$|^nomor_wa/.test(lower)) phoneCol = h;
-          if (!nameCol && /^nama$|^name$|^nama_kontak$|^nama_siswa$|^contact_name$|^fullname/.test(lower)) nameCol = h;
-          if (!groupCol && /^group$|^group_name$|^kelompok$|^gelombang$|^kelas$|^grup$/.test(lower)) groupCol = h;
-          if (!prodiCol && /^prodi$|^minat_prodi$|^program_studi$|^jurusan$|^program/.test(lower)) prodiCol = h;
-          if (!sekolahCol && /^sekolah$|^asal_sekolah$|^sekolah_asal$|^instansi$|^asal$/.test(lower)) sekolahCol = h;
-        }
-
-        // Strategy 2: If still not found, look for substring match
-        if (!phoneCol) {
-          phoneCol = headers.find(h => h.toLowerCase().includes('phone') || h.toLowerCase().includes('nomor'));
-        }
-        if (!nameCol) {
-          nameCol = headers.find(h => h.toLowerCase().includes('nama') || h.toLowerCase().includes('name'));
-        }
-        if (!groupCol) {
-          groupCol = headers.find(h => h.toLowerCase().includes('group') || h.toLowerCase().includes('kelompok'));
-        }
-        if (!prodiCol) {
-          prodiCol = headers.find(h => h.toLowerCase().includes('prodi') || h.toLowerCase().includes('program'));
-        }
-        if (!sekolahCol) {
-          sekolahCol = headers.find(h => h.toLowerCase().includes('sekolah') || h.toLowerCase().includes('asal'));
-        }
-
-        // Fallback to position if not found
-        if (!phoneCol) phoneCol = headers[1] || headers[0];
-        if (!nameCol) nameCol = headers[0] || headers[1];
-        if (!groupCol) groupCol = headers[2] || headers[3];
-        if (!prodiCol) prodiCol = headers[2];
-        if (!sekolahCol) sekolahCol = headers[3];
-
-        console.log('[UPLOAD] Column mapping:', { phoneCol, nameCol, groupCol, prodiCol, sekolahCol });
-
-        const insert = db.prepare(
-          'INSERT OR IGNORE INTO contacts (name, phone, group_name, minat_prodi, asal_sekolah) VALUES (?, ?, ?, ?, ?)'
-        );
-
-        const insertMany = db.transaction((contacts) => {
-          for (const c of contacts) {
-            // Extract phone
-            let phone = (c[phoneCol] || '').toString().trim();
+        try {
+          const db = getFirestore();
+          for (const c of results) {
+            const phone = normalizePhone(c[phoneCol]);
             if (!phone) {
               skipped++;
               continue;
             }
 
-            // Normalize phone: remove spaces, dashes, keep only digits and +
-            phone = phone.replace(/[^\d+]/g, '');
-            if (!phone.startsWith('+') && phone.length > 8) phone = '+' + phone;
-
-            // Extract name - USE EXACT COLUMN NAME
-            let name = (c[nameCol] || '').toString().trim();
-            if (!name) {
-              name = `Contact_${phone.slice(-4)}`;
+            const existing = await findByPhone(phone);
+            if (existing) {
+              skipped++;
+              continue;
             }
 
-            // Extract optional fields
-            const minat_prodi = (c[prodiCol] || 'Teknik Informatika').toString().trim();
-            const asal_sekolah = (c[sekolahCol] || 'unknown').toString().trim();
-
-            const r = insert.run(name, phone, group_name, minat_prodi, asal_sekolah);
-            r.changes ? imported++ : skipped++;
+            const now = admin.firestore.Timestamp.now();
+            await db.collection('contacts').add({
+              name: (c[nameCol] || `Contact_${phone.slice(-4)}`).toString().trim(),
+              phone,
+              group_name,
+              minat_prodi: (c[prodiCol] || 'Teknik Informatika').toString().trim(),
+              asal_sekolah: (c[sekolahCol] || 'unknown').toString().trim(),
+              cluster_id: -1,
+              created_at: now,
+              updated_at: now,
+            });
+            imported++;
           }
-        });
 
-        insertMany(results);
-        fs.unlinkSync(filePath);
-        res.json({ 
-          success: true, 
-          imported, 
-          skipped, 
-          total: results.length,
-          detected: { 
-            nameColumn: nameCol,
-            phoneColumn: phoneCol, 
-            prodiColumn: prodiCol,
-            sekolahColumn: sekolahCol,
-            allHeaders: headers
-          }
-        });
+          fs.unlinkSync(filePath);
+          res.json({ success: true, imported, skipped, total: results.length });
+        } catch (e) {
+          fs.unlinkSync(filePath);
+          res.status(500).json({ error: e.message });
+        }
       })
-      .on('error', (err) => {
+      .on('error', (parseErr) => {
         fs.unlinkSync(filePath);
-        res.status(400).json({ error: 'CSV parsing failed: ' + err.message });
+        res.status(400).json({ error: 'CSV parsing failed: ' + parseErr.message });
       });
   });
 });
 
-// POST /api/contacts/upload/preview — parse CSV and return rows for preview (no DB write)
 router.post('/upload/preview', upload.single('file'), (req, res) => {
   const results = [];
   const group_name = req.body.group_name || 'default';
@@ -217,164 +188,113 @@ router.post('/upload/preview', upload.single('file'), (req, res) => {
   fs.readFile(filePath, 'utf8', (err, data) => {
     if (err) return res.status(500).json({ error: err.message });
 
-    const firstLine = data.split('\n')[0];
-    const delimiter = firstLine.includes('\t') ? '\t' : ',';
-
-    const options = {
-      delimiter: delimiter,
-      headers: true,
-      mapHeaders: ({ header, index }) => header.trim()
-    };
+    const delimiter = data.split('\n')[0].includes('\t') ? '\t' : ',';
+    const options = { delimiter, headers: true, mapHeaders: ({ header }) => header.trim() };
 
     fs.createReadStream(filePath)
       .pipe(csv(options))
-      .on('data', (data) => results.push(data))
+      .on('data', (row) => results.push(row))
       .on('end', () => {
-        if (results.length === 0) {
+        if (!results.length) {
           fs.unlinkSync(filePath);
           return res.status(400).json({ error: 'File CSV kosong' });
         }
 
-        const firstRow = results[0];
-        const headers = Object.keys(firstRow);
+        const headers = Object.keys(results[0]);
+        const phoneCol = headers.find((h) => /phone|nomor/i.test(h)) || headers[1] || headers[0];
+        const nameCol = headers.find((h) => /nama|name/i.test(h)) || headers[0] || headers[1];
+        const prodiCol = headers.find((h) => /prodi|program/i.test(h)) || headers[2];
+        const sekolahCol = headers.find((h) => /sekolah|asal/i.test(h)) || headers[3];
 
-        // SMART COLUMN DETECTION (same as upload)
-        let phoneCol = null;
-        let nameCol = null;
-        let groupCol = null;
-        let prodiCol = null;
-        let sekolahCol = null;
-
-        for (const h of headers) {
-          const lower = h.toLowerCase();
-          if (!phoneCol && /^phone$|^nomor$|^no$|^hp$|^telepon$|^whatsapp$|^wa$|^nomor_wa/.test(lower)) phoneCol = h;
-          if (!nameCol && /^nama$|^name$|^nama_kontak$|^nama_siswa$|^contact_name$|^fullname/.test(lower)) nameCol = h;
-          if (!groupCol && /^group$|^group_name$|^kelompok$|^gelombang$|^kelas$|^grup$/.test(lower)) groupCol = h;
-          if (!prodiCol && /^prodi$|^minat_prodi$|^program_studi$|^jurusan$|^program/.test(lower)) prodiCol = h;
-          if (!sekolahCol && /^sekolah$|^asal_sekolah$|^sekolah_asal$|^instansi$|^asal$/.test(lower)) sekolahCol = h;
-        }
-
-        if (!phoneCol) {
-          phoneCol = headers.find(h => h.toLowerCase().includes('phone') || h.toLowerCase().includes('nomor'));
-        }
-        if (!nameCol) {
-          nameCol = headers.find(h => h.toLowerCase().includes('nama') || h.toLowerCase().includes('name'));
-        }
-        if (!groupCol) {
-          groupCol = headers.find(h => h.toLowerCase().includes('group') || h.toLowerCase().includes('kelompok'));
-        }
-        if (!prodiCol) {
-          prodiCol = headers.find(h => h.toLowerCase().includes('prodi') || h.toLowerCase().includes('program'));
-        }
-        if (!sekolahCol) {
-          sekolahCol = headers.find(h => h.toLowerCase().includes('sekolah') || h.toLowerCase().includes('asal'));
-        }
-
-        if (!phoneCol) phoneCol = headers[1] || headers[0];
-        if (!nameCol) nameCol = headers[0] || headers[1];
-        if (!groupCol) groupCol = headers[2] || headers[3];
-        if (!prodiCol) prodiCol = headers[2];
-        if (!sekolahCol) sekolahCol = headers[3];
-
-        const normalized = results.map((c, idx) => {
-          let phone = (c[phoneCol] || '').toString().trim();
-          phone = phone.replace(/[^\d+]/g, '');
-          if (!phone.startsWith('+') && phone.length > 8) phone = '+' + phone;
-
-          let name = (c[nameCol] || '').toString().trim();
-          if (!name) name = `Contact_${phone.slice(-4)}`;
-
-          const minat_prodi = (c[prodiCol] || 'Teknik Informatika').toString().trim();
-          const asal_sekolah = (c[sekolahCol] || 'unknown').toString().trim();
-
+        const rows = results.map((c, idx) => {
+          const phone = normalizePhone(c[phoneCol]);
           return {
             __idx: idx,
-            name,
+            name: (c[nameCol] || `Contact_${String(phone).slice(-4)}`).toString().trim(),
             phone,
-            minat_prodi,
-            asal_sekolah,
-            original: c
+            minat_prodi: (c[prodiCol] || 'Teknik Informatika').toString().trim(),
+            asal_sekolah: (c[sekolahCol] || 'unknown').toString().trim(),
+            original: c,
           };
         });
 
-        // limit preview size to first 500 rows to avoid huge payloads
-        const previewRows = normalized.slice(0, 500);
         fs.unlinkSync(filePath);
-        res.json({
-          success: true,
-          total: normalized.length,
-          rows: previewRows,
-          detected: {
-            nameColumn: nameCol,
-            phoneColumn: phoneCol,
-            prodiColumn: prodiCol,
-            sekolahColumn: sekolahCol,
-            allHeaders: headers
-          },
-          group_name
-        });
+        res.json({ success: true, total: rows.length, rows: rows.slice(0, 500), group_name });
       })
-      .on('error', (err) => {
+      .on('error', (parseErr) => {
         fs.unlinkSync(filePath);
-        res.status(400).json({ error: 'CSV parsing failed: ' + err.message });
+        res.status(400).json({ error: 'CSV parsing failed: ' + parseErr.message });
       });
   });
 });
 
-// POST /api/contacts/import — import array of parsed rows (from preview)
-router.post('/import', express.json(), (req, res) => {
+router.post('/import', express.json(), async (req, res) => {
   const { rows, group_name } = req.body;
-  if (!rows || !Array.isArray(rows) || rows.length === 0) {
-    return res.status(400).json({ error: 'No rows provided for import' });
-  }
+  if (!rows || !Array.isArray(rows) || !rows.length) return res.status(400).json({ error: 'No rows provided for import' });
 
   let imported = 0;
   let skipped = 0;
+
   try {
-    const insert = db.prepare(
-      'INSERT OR IGNORE INTO contacts (name, phone, group_name, minat_prodi, asal_sekolah) VALUES (?, ?, ?, ?, ?)'
-    );
-
-    const insertMany = db.transaction((contacts) => {
-      for (const c of contacts) {
-        let phone = (c.phone || '').toString().trim();
-        if (!phone) { skipped++; continue; }
-        phone = phone.replace(/[^\d+]/g, '');
-        if (!phone.startsWith('+') && phone.length > 8) phone = '+' + phone;
-
-        let name = (c.name || '').toString().trim();
-        if (!name) name = `Contact_${phone.slice(-4)}`;
-
-        const minat_prodi = (c.minat_prodi || 'Teknik Informatika').toString().trim();
-        const asal_sekolah = (c.asal_sekolah || 'unknown').toString().trim();
-
-        const r = insert.run(name, phone, group_name || 'default', minat_prodi, asal_sekolah);
-        r.changes ? imported++ : skipped++;
+    const db = getFirestore();
+    for (const c of rows) {
+      const phone = normalizePhone(c.phone);
+      if (!phone) {
+        skipped++;
+        continue;
       }
-    });
+      const existing = await findByPhone(phone);
+      if (existing) {
+        skipped++;
+        continue;
+      }
 
-    insertMany(rows);
+      const now = admin.firestore.Timestamp.now();
+      await db.collection('contacts').add({
+        name: (c.name || `Contact_${phone.slice(-4)}`).toString().trim(),
+        phone,
+        group_name: group_name || 'default',
+        minat_prodi: (c.minat_prodi || 'Teknik Informatika').toString().trim(),
+        asal_sekolah: (c.asal_sekolah || 'unknown').toString().trim(),
+        cluster_id: -1,
+        created_at: now,
+        updated_at: now,
+      });
+      imported++;
+    }
+
     res.json({ success: true, imported, skipped, total: rows.length });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// DELETE /api/contacts/:id
-router.delete('/:id', (req, res) => {
-  db.prepare('DELETE FROM contacts WHERE id=?').run(req.params.id);
-  res.json({ success: true });
+router.delete('/:id', async (req, res) => {
+  try {
+    const db = getFirestore();
+    await db.collection('contacts').doc(req.params.id).delete();
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-// DELETE /api/contacts — delete all or by group
-router.delete('/', (req, res) => {
-  const { group } = req.query;
-  if (group) {
-    db.prepare('DELETE FROM contacts WHERE group_name=?').run(group);
-  } else {
-    db.prepare('DELETE FROM contacts').run();
+router.delete('/', async (req, res) => {
+  try {
+    const db = getFirestore();
+    const { group } = req.query;
+    let q = db.collection('contacts');
+    if (group) q = q.where('group_name', '==', group);
+
+    const snap = await q.get();
+    const batch = db.batch();
+    snap.docs.forEach((d) => batch.delete(d.ref));
+    await batch.commit();
+
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
-  res.json({ success: true });
 });
 
 module.exports = router;

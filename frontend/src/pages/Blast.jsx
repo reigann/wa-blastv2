@@ -11,7 +11,9 @@ import {
 } from 'react-bootstrap';
 import PageHeader from '../components/PageHeader';
 import StatusBadge from '../components/StatusBadge';
+import BanditPolicySelector from '../components/BanditPolicySelector';
 import { blastAPI, contactsAPI, templatesAPI } from '../services/api';
+import { BACKEND_URL } from '../lib/config';
 
 const steps = [
   'Select Contacts',
@@ -21,8 +23,6 @@ const steps = [
 ];
 
 const listRowHeight = 52;
-const BACKEND_URL = 'http://localhost:3001';
-
 function toTimeValue(date) {
   const d = new Date(date);
   const pad = (n) => String(n).padStart(2, '0');
@@ -41,6 +41,7 @@ export default function Blast() {
   const [sessionOptions, setSessionOptions] = useState([]);
   const [selectedContactIds, setSelectedContactIds] = useState([]);
   const [selectedTemplate, setSelectedTemplate] = useState(null);
+  const [selectedBanditPolicy, setSelectedBanditPolicy] = useState(null);
   const [search, setSearch] = useState('');
   const [filterGroup, setFilterGroup] = useState('all');
   const [delay, setDelay] = useState(3000);
@@ -57,14 +58,23 @@ export default function Blast() {
 
   async function loadData() {
     try {
-      const [contactRes, templateRes, sessionsRes] = await Promise.all([
+      const [contactRes, templateRes, sessionsRes] = await Promise.allSettled([
         contactsAPI.getAll(),
         templatesAPI.getAll(),
         blastAPI.getSessions(),
       ]);
-      setContacts(contactRes.data || []);
-      setTemplates(templateRes.data || []);
-      setSessionOptions((sessionsRes.data || []).slice(0, 8));
+
+      const contactsData = contactRes.status === 'fulfilled' ? contactRes.value.data || [] : [];
+      const templatesData = templateRes.status === 'fulfilled' ? templateRes.value.data || [] : [];
+      const sessionsData = sessionsRes.status === 'fulfilled' ? sessionsRes.value.data || [] : [];
+
+      setContacts(Array.isArray(contactsData) ? contactsData : []);
+      setTemplates(Array.isArray(templatesData) ? templatesData : []);
+      setSessionOptions(Array.isArray(sessionsData) ? sessionsData.slice(0, 8) : []);
+
+      if (contactRes.status !== 'fulfilled' || templateRes.status !== 'fulfilled') {
+        toast.error('Sebagian data blast gagal dimuat');
+      }
     } catch (error) {
       toast.error('Failed to load blast setup data');
     }
@@ -140,10 +150,12 @@ export default function Blast() {
         group_name: filterGroup === 'all' ? contacts[0]?.group_name || 'default' : filterGroup,
         contact_ids: selectedContactIds,
         schedule_at: scheduleEnabled ? new Date(scheduleAt).toISOString() : undefined,
+        policy_id: selectedBanditPolicy?.id || undefined,
       });
       toast.success('Blast started successfully');
       setCurrentStep(1);
       setSelectedContactIds([]);
+      setSelectedBanditPolicy(null);
     } catch (error) {
       toast.error(error.response?.data?.error || 'Failed to start blast');
     } finally {
@@ -354,7 +366,7 @@ export default function Blast() {
                     ) : null}
                   </Form.Group>
 
-                  <Form.Group>
+                  <Form.Group className="mb-3">
                     <Form.Label>Session Selector</Form.Label>
                     <Form.Select value={sessionName} onChange={(event) => setSessionName(event.target.value)}>
                       <option value="Default Session">Default Session</option>
@@ -362,6 +374,15 @@ export default function Blast() {
                         <option key={session.id} value={session.name}>{session.name}</option>
                       ))}
                     </Form.Select>
+                  </Form.Group>
+
+                  <hr className="my-3" />
+
+                  <Form.Group>
+                    <BanditPolicySelector 
+                      selectedPolicy={selectedBanditPolicy}
+                      onPolicySelect={setSelectedBanditPolicy}
+                    />
                   </Form.Group>
                 </>
               ) : null}
@@ -385,10 +406,16 @@ export default function Blast() {
                           {scheduleEnabled ? new Date(scheduleAt).toLocaleString() : 'Send immediately'}
                         </span>
                       </div>
-                      <div className="d-flex justify-content-between mb-3">
+                      <div className="d-flex justify-content-between mb-2">
                         <span className="text-secondary">Delay</span>
                         <span className="fw-semibold">{delay}ms</span>
                       </div>
+                      {selectedBanditPolicy && (
+                        <div className="d-flex justify-content-between mb-3">
+                          <span className="text-secondary">🤖 Bandit Policy</span>
+                          <Badge bg="success">{selectedBanditPolicy.name}</Badge>
+                        </div>
+                      )}
 
                       <div className="p-3 rounded-3 border" style={{ background: '#ece5dd' }}>
                         <div className="rounded-3 bg-white p-3 shadow-sm" style={{ maxWidth: 420 }}>

@@ -4,10 +4,10 @@ import toast from "react-hot-toast";
 import PageHeader from "../components/PageHeader";
 import EmptyState from "../components/EmptyState";
 import { templatesAPI } from "../services/api";
+import { BACKEND_URL } from "../lib/config";
+import { toMillis } from "../lib/datetime";
 
 const variableOptions = ["{name}", "{date}", "{phone}", "{company}"];
-const BACKEND_URL = "http://localhost:3001";
-
 function insertAtCursor(text, insertion) {
   return `${text}\n${insertion}`.trim();
 }
@@ -176,9 +176,7 @@ export default function Templates() {
     return templates
       .slice()
       .sort(
-        (a, b) =>
-          new Date(b.updated_at || b.created_at) -
-          new Date(a.updated_at || a.created_at),
+        (a, b) => toMillis(b.updated_at || b.created_at) - toMillis(a.updated_at || a.created_at),
       );
   }, [templates]);
 
@@ -307,9 +305,7 @@ export default function Templates() {
 
                 <div className="d-flex justify-content-between small text-secondary">
                   <span>
-                    {new Date(
-                      template.updated_at || template.created_at || Date.now(),
-                    ).toLocaleDateString()}
+                    {new Date(toMillis(template.updated_at || template.created_at) || Date.now()).toLocaleDateString()}
                   </span>
                   <span>
                     {template.media_path

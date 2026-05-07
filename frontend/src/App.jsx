@@ -5,7 +5,7 @@ import { Toaster } from 'react-hot-toast';
 import Sidebar from './components/Sidebar';
 import Topbar from './components/Topbar';
 import { useSocket } from './hooks/useSocket';
-import { authAPI } from './services/api';
+import { authAPI, systemAPI } from './services/api';
 import Login from './pages/Login';
 import { clearAuthStorage, getAuthToken, getAuthUser } from './lib/auth';
 
@@ -16,6 +16,7 @@ const Templates = lazy(() => import('./pages/Templates'));
 const Sessions = lazy(() => import('./pages/Sessions'));
 const Logs = lazy(() => import('./pages/Logs'));
 const Clustering = lazy(() => import('./pages/Clustering'));
+const Bandit = lazy(() => import('./pages/Bandit'));
 
 const routeTitleMap = {
   '/': 'Dashboard',
@@ -25,6 +26,7 @@ const routeTitleMap = {
   '/sessions': 'Sessions',
   '/logs': 'Logs',
   '/clustering': 'Clustering',
+  '/bandit': 'Bandit Analytics',
 };
 
 function AppShell({ currentUser, onLogoutApp }) {
@@ -32,6 +34,11 @@ function AppShell({ currentUser, onLogoutApp }) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [viewportWidth, setViewportWidth] = useState(typeof window !== 'undefined' ? window.innerWidth : 1400);
   const [notifications, setNotifications] = useState([]);
+  const [healthStatus, setHealthStatus] = useState({
+    ok: null,
+    storage: 'unknown',
+    features: {},
+  });
   const location = useLocation();
   const { waStatus, qrCode, waPhone, blastProgress, blastStatus } = useSocket();
   const prevWaStatusRef = useRef(null);
@@ -165,6 +172,25 @@ function AppShell({ currentUser, onLogoutApp }) {
     };
   }, [requiresQr]);
 
+  useEffect(() => {
+    let timer = null;
+
+    async function loadHealth() {
+      try {
+        const response = await systemAPI.health();
+        setHealthStatus(response.data || { ok: false, storage: 'unknown', features: {} });
+      } catch (error) {
+        setHealthStatus((prev) => ({ ...prev, ok: false }));
+      }
+    }
+
+    loadHealth();
+    timer = setInterval(loadHealth, 30000);
+    return () => {
+      if (timer) clearInterval(timer);
+    };
+  }, []);
+
   const title = useMemo(() => routeTitleMap[location.pathname] || 'Overview', [location.pathname]);
   const unreadCount = useMemo(() => notifications.filter((item) => !item.read).length, [notifications]);
 
@@ -209,6 +235,7 @@ function AppShell({ currentUser, onLogoutApp }) {
         currentUser={currentUser}
         onLogoutApp={onLogoutApp}
         waPhone={waPhone}
+        healthStatus={healthStatus}
       />
 
       <main className="app-main">
@@ -228,6 +255,7 @@ function AppShell({ currentUser, onLogoutApp }) {
               <Route path="/sessions" element={<Sessions />} />
               <Route path="/logs" element={<Logs />} />
               <Route path="/clustering" element={<Clustering />} />
+              <Route path="/bandit" element={<Bandit />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           </Suspense>
@@ -240,7 +268,7 @@ function AppShell({ currentUser, onLogoutApp }) {
         </Modal.Header>
         <Modal.Body>
           <p className="text-secondary mb-3">
-            Akun <strong>{currentUser?.username}</strong> harus scan QR dulu sebelum bisa pakai aplikasi.
+            Akun <strong>{currentUser?.name || currentUser?.email}</strong> harus scan QR dulu sebelum bisa pakai aplikasi.
           </p>
 
           {waStatus === 'qr' ? (

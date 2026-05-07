@@ -1,42 +1,33 @@
 import { useState } from 'react';
-import { Button, Card, Form } from 'react-bootstrap';
+import { Button, Card, Spinner } from 'react-bootstrap';
 import toast from 'react-hot-toast';
-import { authAPI } from '../services/api';
+import axios from 'axios';
 import { setAuthToken, setAuthUser } from '../lib/auth';
+import { signInWithGoogleFirebase } from '../lib/firebaseAuth';
+import { BACKEND_URL } from '../lib/config';
 
 export default function Login({ onLoginSuccess }) {
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
 
-  async function handleSubmit(event) {
-    event.preventDefault();
-    if (!username || !password) {
-      toast.error('Username dan password wajib diisi');
-      return;
-    }
-
+  const handleGoogleLogin = async () => {
     setLoading(true);
     try {
-      const response = await authAPI.login({ username, password });
-      const token = response.data?.token;
-      const user = response.data?.user;
-
-      if (!token) {
-        toast.error('Token login tidak ditemukan');
-        return;
-      }
+      const { idToken } = await signInWithGoogleFirebase();
+      const response = await axios.post(`${BACKEND_URL}/api/auth/firebase`, { idToken });
+      const { token, user } = response.data;
 
       setAuthToken(token);
-      setAuthUser(user || { username });
-      toast.success(`Login berhasil sebagai ${user?.username || username}`);
-      onLoginSuccess?.(user || { username });
-    } catch (error) {
-      toast.error(error.response?.data?.error || 'Login gagal');
+      setAuthUser(user);
+      toast.success(`Login berhasil sebagai ${user?.name || user?.email}`);
+      onLoginSuccess?.(user);
+    } catch (err) {
+      const msg = err?.response?.data?.error || err.message || 'Login failed';
+      toast.error(`Login gagal: ${msg}`);
+      console.error('Firebase login error:', err);
     } finally {
       setLoading(false);
     }
-  }
+  };
 
   return (
     <div className="min-vh-100 d-flex align-items-center justify-content-center p-3" style={{ background: 'var(--surface-2)' }}>
@@ -46,30 +37,29 @@ export default function Login({ onLoginSuccess }) {
             <div className="logo-icon mx-auto mb-2" style={{ width: 42, height: 42, fontSize: 22 }}>
               <i className="bi bi-whatsapp" />
             </div>
-            <h2 className="mb-1">WA Blaster Login</h2>
-            <p className="text-secondary mb-0">Masuk dengan username dan password yang diset di .env</p>
+            <h2 className="mb-1">WA Blaster</h2>
+            <p className="text-secondary mb-0">Login Google via Firebase</p>
           </div>
 
-          <Form onSubmit={handleSubmit}>
-            <Form.Group className="mb-3">
-              <Form.Label>Username</Form.Label>
-              <Form.Control value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" />
-            </Form.Group>
+          <Button className="w-100" variant="outline-primary" onClick={handleGoogleLogin} disabled={loading}>
+            {loading ? (
+              <>
+                <Spinner size="sm" className="me-2" animation="border" />
+                Signing in...
+              </>
+            ) : (
+              <>
+                <i className="bi bi-google me-2" />
+                Sign in with Google
+              </>
+            )}
+          </Button>
 
-            <Form.Group className="mb-3">
-              <Form.Label>Password</Form.Label>
-              <Form.Control
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                autoComplete="current-password"
-              />
-            </Form.Group>
-
-            <Button type="submit" className="w-100" disabled={loading}>
-              {loading ? 'Signing in...' : 'Sign In'}
-            </Button>
-          </Form>
+          <div className="mt-4 p-3 bg-light rounded">
+            <p className="small text-muted mb-0">
+              <strong>Hanya email yang terdaftar</strong> di allowlist Firebase yang dapat login.
+            </p>
+          </div>
         </Card.Body>
       </Card>
     </div>

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Breadcrumb, Dropdown, Form, InputGroup } from 'react-bootstrap';
+import { Badge, Breadcrumb, Dropdown, Form, InputGroup } from 'react-bootstrap';
 
 function getLevelClass(level = 'info') {
   const key = String(level).toLowerCase();
@@ -7,6 +7,30 @@ function getLevelClass(level = 'info') {
   if (key === 'warn' || key === 'warning') return 'warning';
   if (key === 'error' || key === 'danger') return 'danger';
   return 'primary';
+}
+
+const featureMeta = {
+  auth: { label: 'Authentication', icon: 'bi-shield-check' },
+  contacts: { label: 'Contacts', icon: 'bi-people' },
+  templates: { label: 'Templates', icon: 'bi-file-earmark-text' },
+  blast: { label: 'Blast Campaign', icon: 'bi-send' },
+  clustering: { label: 'Clustering', icon: 'bi-diagram-3' },
+  bandit: { label: 'Bandit Analytics', icon: 'bi-graph-up' },
+  banditOptimization: { label: 'Bandit Optimization', icon: 'bi-gear' },
+};
+
+function StatusDot({ enabled }) {
+  return (
+    <span
+      className="d-inline-block rounded-circle me-2"
+      style={{
+        width: 8,
+        height: 8,
+        background: enabled ? '#22c55e' : '#94a3b8',
+        boxShadow: enabled ? '0 0 6px rgba(34,197,94,0.5)' : 'none',
+      }}
+    />
+  );
 }
 
 export default function Topbar({
@@ -22,9 +46,10 @@ export default function Topbar({
   currentUser,
   onLogoutApp,
   waPhone,
+  healthStatus,
 }) {
   const [searchExpanded, setSearchExpanded] = useState(false);
-  const initials = String(currentUser?.username || 'U').slice(0, 2).toUpperCase();
+  const initials = String(currentUser?.name || currentUser?.email || 'U').slice(0, 2).toUpperCase();
 
   const formatPhone = (p) => {
     if (!p) return '';
@@ -35,6 +60,9 @@ export default function Topbar({
       return String(p);
     }
   };
+
+  const storageName = String(healthStatus?.storage || 'unknown').toUpperCase();
+  const features = healthStatus?.features || {};
 
   return (
     <header className="app-topbar">
@@ -55,6 +83,54 @@ export default function Topbar({
         </div>
 
         <div className="d-flex align-items-center gap-2">
+          <Dropdown align="end">
+            <Dropdown.Toggle
+              as="button"
+              className="btn btn-sm d-flex align-items-center gap-2 px-2 py-1 border bg-transparent"
+              style={{ fontSize: '0.75rem' }}
+            >
+              <span
+                className="d-inline-block rounded-circle"
+                style={{
+                  width: 8,
+                  height: 8,
+                  background: healthStatus?.ok ? '#22c55e' : '#ef4444',
+                  boxShadow: healthStatus?.ok ? '0 0 6px rgba(34,197,94,0.5)' : '0 0 6px rgba(239,68,68,0.5)',
+                }}
+              />
+              <span className="d-none d-lg-inline fw-semibold">{storageName}</span>
+              <i className="bi bi-chevron-down small" />
+            </Dropdown.Toggle>
+            <Dropdown.Menu className="p-0" style={{ minWidth: 240 }}>
+              <div className="px-3 py-2 border-bottom bg-light">
+                <div className="fw-semibold small">System Status</div>
+                <div className="text-secondary small">Storage: {storageName}</div>
+              </div>
+              <div style={{ maxHeight: 280, overflowY: 'auto' }}>
+                {Object.entries(features).map(([key, enabled]) => {
+                  const meta = featureMeta[key] || { label: key, icon: 'bi-circle' };
+                  return (
+                    <div key={key} className="px-3 py-2 d-flex align-items-center justify-content-between border-bottom">
+                      <div className="d-flex align-items-center small">
+                        <StatusDot enabled={enabled} />
+                        <i className={`${meta.icon} me-2 text-secondary`} />
+                        <span>{meta.label}</span>
+                      </div>
+                      <Badge bg={enabled ? 'success' : 'secondary'} className="small" pill>
+                        {enabled ? 'Active' : 'Inactive'}
+                      </Badge>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="px-3 py-2 bg-light text-center">
+                <small className="text-secondary">
+                  {healthStatus?.ok ? 'All systems operational' : 'Some services may be degraded'}
+                </small>
+              </div>
+            </Dropdown.Menu>
+          </Dropdown>
+
           <InputGroup className={`topbar-search ${searchExpanded ? 'expanded' : ''}`}>
             <InputGroup.Text className="bg-white border-end-0">
               <i className="bi bi-search" />
@@ -156,7 +232,7 @@ export default function Topbar({
             <Dropdown.Toggle variant="light" className="border d-flex align-items-center gap-2">
                 <span className="avatar-circle" style={{ width: 28, height: 28, background: '#243b55', fontSize: 12 }}>{initials}</span>
                 <div className="d-none d-md-flex flex-column align-items-start">
-                  <span>{currentUser?.username || 'User'}</span>
+                  <span>{currentUser?.name || currentUser?.email || 'User'}</span>
                   <small className="text-secondary">{waPhone ? formatPhone(waPhone) : 'No WA connected'}</small>
                 </div>
               </Dropdown.Toggle>

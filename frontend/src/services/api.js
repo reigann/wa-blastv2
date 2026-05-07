@@ -1,8 +1,9 @@
 import axios from 'axios';
 import { clearAuthStorage, getAuthToken } from '../lib/auth';
+import { API_BASE_URL } from '../lib/config';
 
 const api = axios.create({
-  baseURL: 'http://localhost:3001/api',
+  baseURL: API_BASE_URL,
   timeout: 30000
 });
 
@@ -34,11 +35,13 @@ api.interceptors.response.use(
 );
 
 export const authAPI = {
-  login: (credentials) => api.post('/auth/login', credentials),
   me: () => api.get('/auth/me'),
   logoutApp: () => api.post('/auth/logout-app-token'),
   getStatus: () => api.get('/auth/status'),
-  logout: () => api.post('/auth/logout')
+  logout: () => api.post('/auth/logout'),
+  getAllowlist: () => api.get('/auth/allowlist'),
+  addToAllowlist: (email) => api.post('/auth/allowlist/add', { email }),
+  removeFromAllowlist: (email) => api.post('/auth/allowlist/remove', { email })
 };
 
 export const contactsAPI = {
@@ -69,11 +72,34 @@ export const templatesAPI = {
   delete: (id) => api.delete(`/templates/${id}`)
 };
 
+export const banditAPI = {
+  create: (data) => api.post('/bandit/create', data),
+  recommend: (data) => api.post('/bandit/recommend', data),
+  feedback: (data) => api.post('/bandit/feedback', data),
+  getPolicies: () => api.get('/bandit/policies'),
+  getEvents: (params) => api.get('/bandit/events', { params }),
+  updateDeliveryStatus: (data) => api.post('/bandit/update-delivery-status', data),
+  getAnalytics: (policyId) => api.get(`/bandit/analytics/${policyId}`),
+  defineArms: (data) => api.post('/bandit/define-arms', data),
+  getArmDefinitions: (policyId) => api.get(`/bandit/arm-definitions/${policyId}`),
+  getEventsByPolicy: (policyId) => api.get(`/bandit/events/${policyId}`),
+  getDebug: (policyId) => api.get(`/bandit/debug/${policyId}`),
+  simulateRead: (data) => api.post('/bandit/test/simulate-read', data),
+  simulateReply: (data) => api.post('/bandit/test/simulate-reply', data),
+};
+
 export const clusteringAPI = {
   run: (data) => api.post('/clustering/run', data),
   latest: () => api.get('/clustering/latest'),
   contactsByCluster: (clusterId) => api.get(`/clustering/contacts-by-cluster/${clusterId}`),
-  clear: () => api.delete('/clustering/clear')
+  clear: () => api.delete('/clustering/clear'),
+  getResults: (params) => api.get('/clustering/results', { params }),
+  getStats: () => api.get('/clustering/stats'),
+  getDebug: () => api.get('/clustering/debug'),
+};
+
+export const systemAPI = {
+  health: () => api.get('/health'),
 };
 
 export default api;

@@ -18,14 +18,17 @@ const sections = [
     ],
   },
   {
-    title: 'Tools',
-    items: [{ to: '/clustering', label: 'Clustering', icon: 'bi-diagram-3' }],
+    title: 'Analytics & Tools',
+    items: [
+      { to: '/clustering', label: 'Clustering', icon: 'bi-diagram-3' },
+      { to: '/bandit', label: 'Bandit Analytics', icon: 'bi-graph-up' },
+    ],
   },
 ];
 
 export default function Sidebar({ mobileOpen, closeMobile, collapsed, setCollapsed, canCollapse, currentUser, onLogoutApp }) {
   const location = useLocation();
-  const initials = String(currentUser?.username || 'U')
+  const initials = String(currentUser?.name || currentUser?.email || 'U')
     .slice(0, 2)
     .toUpperCase();
   

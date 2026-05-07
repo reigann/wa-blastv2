@@ -21,6 +21,7 @@ import toast from 'react-hot-toast';
 import PageHeader from '../components/PageHeader';
 import EmptyState from '../components/EmptyState';
 import { blastAPI, clusteringAPI, templatesAPI } from '../services/api';
+import { toMillis } from '../lib/datetime';
 
 const clusterColors = ['#25D366', '#128C7E', '#dc3545', '#1a2942', '#06b6d4', '#f97316', '#6366f1', '#84cc16'];
 
@@ -30,9 +31,9 @@ function jitter(seed) {
 }
 
 function recencyDays(dateStr) {
-  const date = new Date(dateStr);
-  if (Number.isNaN(date.getTime())) return 0;
-  return Math.max(Math.floor((Date.now() - date.getTime()) / (1000 * 60 * 60 * 24)), 0);
+  const ms = toMillis(dateStr);
+  if (!ms) return 0;
+  return Math.max(Math.floor((Date.now() - ms) / (1000 * 60 * 60 * 24)), 0);
 }
 
 export default function Clustering() {

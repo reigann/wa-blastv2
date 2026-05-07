@@ -2,6 +2,8 @@ const db = require('../db/database');
 const fs = require('fs');
 const { roomForUser, sendMessage, sendMessageWithMedia, normalizePhone } = require('./whatsappService');
 const banditService = require('./banditService');
+const { admin, getFirestore } = require('./firebaseAdmin');
+const STORAGE_PROVIDER = (process.env.STORAGE_PROVIDER || 'firebase').toLowerCase();
 
 const activeBlasts = new Map();
 let io = null;
@@ -44,6 +46,46 @@ function emitToUser(username, event, payload) {
   io.to(roomForUser(username)).emit(event, payload);
 }
 
+async function updateSession(sessionId, patch) {
+  if (STORAGE_PROVIDER === 'firebase') {
+    await getFirestore().collection('blast_sessions').doc(String(sessionId)).set(patch, { merge: true });
+    return;
+  }
+  if (patch.status && patch.started_at) {
+    await db.run(`UPDATE blast_sessions SET status=?, started_at=? WHERE id=?`, [patch.status, patch.started_at, sessionId]);
+    return;
+  }
+  if (patch.status && patch.completed_at) {
+    await db.run(`UPDATE blast_sessions SET status=?, completed_at=? WHERE id=?`, [patch.status, patch.completed_at, sessionId]);
+    return;
+  }
+  if (typeof patch.sent !== 'undefined' || typeof patch.failed !== 'undefined') {
+    await db.run(`UPDATE blast_sessions SET sent=?, failed=? WHERE id=?`, [patch.sent || 0, patch.failed || 0, sessionId]);
+  }
+}
+
+async function insertBlastLog(log) {
+  if (STORAGE_PROVIDER === 'firebase') {
+    await getFirestore().collection('blast_logs').add({
+      ...log,
+      session_id: String(log.session_id),
+      sent_at: admin.firestore.Timestamp.fromDate(new Date(log.sent_at || Date.now())),
+    });
+    return;
+  }
+  if (log.status === 'sent') {
+    await db.run(
+      `INSERT INTO blast_logs (session_id, phone, name, status, sent_at) VALUES (?, ?, ?, 'sent', ?)`,
+      [log.session_id, log.phone, log.name, log.sent_at]
+    );
+    return;
+  }
+  await db.run(
+    `INSERT INTO blast_logs (session_id, phone, name, status, error_message, sent_at) VALUES (?, ?, ?, 'failed', ?, ?)`,
+    [log.session_id, log.phone, log.name, log.error_message || '', log.sent_at]
+  );
+}
+
 // Replace template variables in both formats:
 // - {{name}} and {name}
 // - {{phone}} and {phone}
@@ -72,7 +114,7 @@ function processTemplate(message, contact) {
   return output;
 }
 
-async function startBlast(sessionId, contacts, message, delayMin, delayMax, mediaPath = null, username = 'default', banditPolicyId = null, link = null) {
+async function startBlast(sessionId, contacts, message, delayMin, delayMax, mediaPath = null, username = 'default', policyId = null, link = null) {
   if (activeBlasts.get(username)) {
     throw new Error('A blast is already in progress');
   }
@@ -85,9 +127,7 @@ async function startBlast(sessionId, contacts, message, delayMin, delayMax, medi
 
   // Update session status with current local time
   const now = new Date().toISOString();
-  db.prepare(`
-    UPDATE blast_sessions SET status='running', started_at=? WHERE id=?
-  `).run(now, sessionId);
+  await updateSession(sessionId, { status: 'running', started_at: now });
 
   emitToUser(username, 'blast:started', { sessionId, total: contacts.length });
 
@@ -98,7 +138,7 @@ async function startBlast(sessionId, contacts, message, delayMin, delayMax, medi
     // Check if blast was cancelled
     const activeState = activeBlasts.get(username);
     if (!activeState || activeState.cancelled) {
-      db.prepare(`UPDATE blast_sessions SET status='cancelled' WHERE id=?`).run(sessionId);
+      await updateSession(sessionId, { status: 'cancelled', completed_at: new Date().toISOString() });
       emitToUser(username, 'blast:cancelled', { sessionId });
       activeBlasts.delete(username);
       return;
@@ -118,7 +158,7 @@ async function startBlast(sessionId, contacts, message, delayMin, delayMax, medi
 
     // Prepare optional bandit recommendation (non-blocking if disabled)
     let banditEventId = null;
-    if (process.env.BANDIT_ENABLED === 'true' && banditPolicyId) {
+    if (process.env.BANDIT_ENABLED === 'true' && policyId) {
       try {
         // build simple context from contact
         const createdDate = new Date(contact.created_at);
@@ -134,7 +174,7 @@ async function startBlast(sessionId, contacts, message, delayMin, delayMax, medi
         };
 
         const normPhone = normalizePhone(contact.phone);
-        const rec = await banditService.recommend(banditPolicyId, context, sessionId, normPhone);
+        const rec = await banditService.recommend(policyId, context, sessionId, normPhone);
         banditEventId = rec.eventId;
         emitToUser(username, 'bandit:recommend', { sessionId, phone: normPhone, arm: rec.arm, eventId: banditEventId });
       } catch (err) {
@@ -156,14 +196,22 @@ async function startBlast(sessionId, contacts, message, delayMin, delayMax, medi
         messageSent = true;
 
         const logTime = new Date().toISOString();
-        db.prepare(`
-          INSERT INTO blast_logs (session_id, phone, name, status, sent_at) VALUES (?, ?, ?, 'sent', ?)
-        `).run(sessionId, contact.phone, contact.name, logTime);
+        await insertBlastLog({
+          session_id: sessionId,
+          phone: contact.phone,
+          name: contact.name,
+          status: 'sent',
+          sent_at: logTime,
+        });
 
-        // notify bandit that message was sent (reward will be provided later via /api/bandit/feedback)
+        // Auto-apply reward for bandit: message was successfully sent
         if (banditEventId) {
-          // we keep reward null for now; frontend or external process should call /api/bandit/feedback when reply is observed
-          // but emit event so operator knows mapping
+          try {
+            // Try to auto-reward with 'sent' status (0.5 base reward + bonuses if applicable)
+            await banditService.updateEventDeliveryStatus(banditEventId, 'sent', 0, 0);
+          } catch (err) {
+            console.warn('Failed to auto-reward bandit event:', err?.message);
+          }
           emitToUser(username, 'bandit:event', { eventId: banditEventId, phone: contact.phone });
         }
 
@@ -213,9 +261,23 @@ async function startBlast(sessionId, contacts, message, delayMin, delayMax, medi
         messageSent = true; // Exit retry loop
 
         const failedLogTime = new Date().toISOString();
-        db.prepare(`
-          INSERT INTO blast_logs (session_id, phone, name, status, error_message, sent_at) VALUES (?, ?, ?, 'failed', ?, ?)
-        `).run(sessionId, contact.phone, contact.name, err.message, failedLogTime);
+        await insertBlastLog({
+          session_id: sessionId,
+          phone: contact.phone,
+          name: contact.name,
+          status: 'failed',
+          error_message: err.message,
+          sent_at: failedLogTime,
+        });
+
+        // Auto-apply penalty reward for bandit: message failed
+        if (banditEventId) {
+          try {
+            await banditService.updateEventDeliveryStatus(banditEventId, 'failed', 0, 0);
+          } catch (errBandit) {
+            console.warn('Failed to record bandit penalty:', errBandit?.message);
+          }
+        }
 
         emitToUser(username, 'blast:progress', {
           sessionId,
@@ -234,9 +296,7 @@ async function startBlast(sessionId, contacts, message, delayMin, delayMax, medi
     }
 
     // Update session counters after each message
-    db.prepare(`
-      UPDATE blast_sessions SET sent=?, failed=? WHERE id=?
-    `).run(sent, failed, sessionId);
+    await updateSession(sessionId, { sent, failed });
 
     // Delay between messages (skip delay after last message)
     if (i < contacts.length - 1) {
@@ -248,9 +308,7 @@ async function startBlast(sessionId, contacts, message, delayMin, delayMax, medi
 
   // Mark session as completed
   const completedTime = new Date().toISOString();
-  db.prepare(`
-    UPDATE blast_sessions SET status='completed', completed_at=? WHERE id=?
-  `).run(completedTime, sessionId);
+  await updateSession(sessionId, { status: 'completed', completed_at: completedTime, sent, failed });
 
   // After completing, check queue for next session and start it if present
   try {
@@ -304,9 +362,7 @@ function cancelBlast(username = 'default') {
     
     // Langsung update database status ke cancelled
     const cancelledTime = new Date().toISOString();
-    db.prepare(`
-      UPDATE blast_sessions SET status='cancelled', completed_at=? WHERE id=?
-    `).run(cancelledTime, sessionId);
+    updateSession(sessionId, { status: 'cancelled', completed_at: cancelledTime }).catch(() => {});
     
     // Emit event ke frontend
     if (io) {
@@ -343,7 +399,7 @@ function scheduleSession(sessionId, payload, scheduledAt) {
       // read persisted payload if present
       let payloadObj = payload || {};
       try {
-        const qrow = db.prepare('SELECT payload FROM blast_queue WHERE session_id=?').get(sessionId);
+        const qrow = await db.get('SELECT payload FROM blast_queue WHERE session_id=?', [sessionId]);
         if (qrow && qrow.payload) {
           payloadObj = JSON.parse(qrow.payload);
         }
@@ -355,7 +411,7 @@ function scheduleSession(sessionId, payload, scheduledAt) {
       if (getActiveBlast(username)) {
         // mark as queued and leave payload in blast_queue for later processing
         try {
-          db.prepare(`UPDATE blast_sessions SET status='queued' WHERE id=?`).run(sessionId);
+          await db.run(`UPDATE blast_sessions SET status='queued' WHERE id=?`, [sessionId]);
         } catch (err) {
           console.error('Failed to mark scheduled session queued:', err?.message || err);
         }
@@ -364,7 +420,7 @@ function scheduleSession(sessionId, payload, scheduledAt) {
 
       // No active blast: remove payload from queue (if any) and start
       try {
-        db.prepare('DELETE FROM blast_queue WHERE session_id=?').run(sessionId);
+        await db.run('DELETE FROM blast_queue WHERE session_id=?', [sessionId]);
       } catch (e) {
         // ignore
       }
@@ -373,17 +429,17 @@ function scheduleSession(sessionId, payload, scheduledAt) {
       let contacts = [];
       if (payloadObj.contact_ids && payloadObj.contact_ids.length > 0) {
         const placeholders = payloadObj.contact_ids.map(() => '?').join(',');
-        contacts = db.prepare(`SELECT * FROM contacts WHERE id IN (${placeholders})`).all(...payloadObj.contact_ids);
+        contacts = await db.all(`SELECT * FROM contacts WHERE id IN (${placeholders})`, payloadObj.contact_ids);
       } else if (payloadObj.group_name) {
-        contacts = db.prepare('SELECT * FROM contacts WHERE group_name=?').all(payloadObj.group_name);
+        contacts = await db.all('SELECT * FROM contacts WHERE group_name=?', [payloadObj.group_name]);
       }
 
-      const sessionRow = db.prepare('SELECT message FROM blast_sessions WHERE id=?').get(sessionId);
+      const sessionRow = await db.get('SELECT message FROM blast_sessions WHERE id=?', [sessionId]);
       const message = sessionRow ? sessionRow.message : '';
 
       // mark session running
       const scheduledStartTime = new Date().toISOString();
-      db.prepare(`UPDATE blast_sessions SET status='running', started_at=? WHERE id=?`).run(scheduledStartTime, sessionId);
+      await db.run(`UPDATE blast_sessions SET status='running', started_at=? WHERE id=?`, [scheduledStartTime, sessionId]);
 
       // start blast async
       startBlast(sessionId, contacts, message, payloadObj.delay_min, payloadObj.delay_max, payloadObj.mediaPath || null, payloadObj.username || 'default', payloadObj.bandit_policy_id, payloadObj.link || null).catch(console.error);
@@ -396,9 +452,10 @@ function scheduleSession(sessionId, payload, scheduledAt) {
 }
 
 async function initScheduledSessions() {
-  const db = require('../db/database');
   try {
-    const rows = db.prepare(`SELECT id, scheduled_at FROM blast_sessions WHERE status='scheduled' AND scheduled_at IS NOT NULL`).all();
+    const rows = await db.all(
+      `SELECT id, scheduled_at FROM blast_sessions WHERE status='scheduled' AND scheduled_at IS NOT NULL`
+    );
     for (const r of rows) {
       try {
         scheduleSession(r.id, JSON.parse('{}'), r.scheduled_at);

@@ -1,6 +1,8 @@
 const cron = require('node-cron');
 const db = require('../db/database');
 const banditService = require('./banditService');
+const { getFirestore } = require('./firebaseAdmin');
+const STORAGE_PROVIDER = (process.env.STORAGE_PROVIDER || 'firebase').toLowerCase();
 
 function start() {
   const enabled = process.env.BANDIT_ENABLED === 'true';
@@ -15,8 +17,21 @@ function start() {
   // Run at minute 0 every hour
   cron.schedule('0 * * * *', async () => {
     try {
-      const cutoff = new Date(Date.now() - expiryHours * 3600 * 1000).toISOString();
-      const rows = db.prepare('SELECT * FROM bandit_events WHERE reward IS NULL AND created_at <= ?').all(cutoff);
+      const cutoffDate = new Date(Date.now() - expiryHours * 3600 * 1000);
+      let rows = [];
+
+      if (STORAGE_PROVIDER === 'firebase') {
+        const snap = await getFirestore()
+          .collection('bandit_events')
+          .where('reward', '==', null)
+          .where('created_at', '<=', cutoffDate)
+          .get();
+        rows = snap.docs.map((doc) => ({ id: Number(doc.id), ...doc.data() }));
+      } else {
+        const cutoff = cutoffDate.toISOString();
+        rows = db.prepare('SELECT * FROM bandit_events WHERE reward IS NULL AND created_at <= ?').all(cutoff);
+      }
+
       if (!rows || rows.length === 0) return;
 
       console.log(`Bandit worker: expiring ${rows.length} events older than ${expiryHours} hours`);

@@ -21,6 +21,7 @@ import PageHeader from '../components/PageHeader';
 import StatusBadge from '../components/StatusBadge';
 import EmptyState from '../components/EmptyState';
 import { blastAPI, contactsAPI } from '../services/api';
+import { toMillis } from '../lib/datetime';
 
 function normalizeStatus(session) {
   if (session.status === 'running') return 'active';
@@ -47,7 +48,7 @@ export default function Sessions() {
   async function loadSessions() {
     try {
       const response = await blastAPI.getSessions();
-      setSessions((response.data || []).slice().sort((a, b) => new Date(b.created_at) - new Date(a.created_at)));
+      setSessions((response.data || []).slice().sort((a, b) => toMillis(b.created_at) - toMillis(a.created_at)));
     } catch (error) {
       setSessions([]);
       toast.error('Failed to load sessions');
@@ -110,7 +111,7 @@ export default function Sessions() {
   }, [logs]);
 
   const filteredSessions = sessions.filter(s=>{
-    const dt = new Date(s.created_at || s.updated_at);
+    const dt = new Date(toMillis(s.created_at || s.updated_at) || Date.now());
     const monthMatch = filterMonth === 'all' ? true : (dt.getMonth()+1) === Number(filterMonth);
     const yearMatch = filterYear === 'all' ? true : dt.getFullYear() === Number(filterYear);
     return monthMatch && yearMatch;
@@ -148,13 +149,13 @@ export default function Sessions() {
           </Form.Select>
           <Form.Select value={filterYear} onChange={(e)=>setFilterYear(e.target.value)} style={{width:140}}>
             <option value="all">All Years</option>
-            {Array.from(new Set(sessions.map(s=>new Date(s.created_at).getFullYear()))).sort((a,b)=>b-a).map(y=> (
+            {Array.from(new Set(sessions.map(s=>new Date(toMillis(s.created_at) || Date.now()).getFullYear()))).sort((a,b)=>b-a).map(y=> (
               <option key={y} value={String(y)}>{y}</option>
             ))}
           </Form.Select>
         </div>
       </div>
-      {sessions.length === 0 ? (
+      {filteredSessions.length === 0 ? (
         <Card className="surface-card">
           <EmptyState
             icon="bi-broadcast-pin"
@@ -210,7 +211,7 @@ export default function Sessions() {
 
                     <div className="d-flex justify-content-between align-items-center small text-secondary mb-2">
                       <span>Blast Started</span>
-                      <span>{new Date(session.started_at || session.created_at).toLocaleString()}</span>
+                      <span>{new Date(toMillis(session.started_at || session.created_at) || Date.now()).toLocaleString()}</span>
                     </div>
 
                     <div className="d-flex gap-2 mt-3">

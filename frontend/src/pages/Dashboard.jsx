@@ -16,7 +16,8 @@ import PageHeader from '../components/PageHeader';
 import StatusBadge from '../components/StatusBadge';
 import DataTable from '../components/DataTable';
 import SkeletonCard from '../components/SkeletonCard';
-import { blastAPI, contactsAPI } from '../services/api';
+import BanditAnalytics from '../components/BanditAnalytics';
+import { blastAPI, contactsAPI, banditAPI } from '../services/api';
 
 const StatusDonut = memo(function StatusDonut({ data }) {
   return (
@@ -56,10 +57,29 @@ function getDayLabel(date) {
   return new Date(date).toLocaleDateString('en-US', { weekday: 'short' });
 }
 
+function toMillis(value) {
+  if (!value) return 0;
+  if (typeof value?.toMillis === 'function') return value.toMillis();
+  if (typeof value === 'number') return value;
+  if (typeof value === 'string') {
+    const t = Date.parse(value);
+    return Number.isNaN(t) ? 0 : t;
+  }
+  if (typeof value === 'object') {
+    if (typeof value._seconds === 'number') return value._seconds * 1000;
+    if (typeof value.seconds === 'number') return value.seconds * 1000;
+  }
+  const t = new Date(value).getTime();
+  return Number.isNaN(t) ? 0 : t;
+}
+
 export default function Dashboard() {
+  const banditEnabled = import.meta.env.VITE_ENABLE_BANDIT === 'true';
   const [loading, setLoading] = useState(true);
   const [contactsTotal, setContactsTotal] = useState(0);
   const [sessions, setSessions] = useState([]);
+  const [policies, setPolicies] = useState([]);
+  const [selectedPolicy, setSelectedPolicy] = useState(null);
 
   useEffect(() => {
     let mounted = true;
@@ -67,15 +87,34 @@ export default function Dashboard() {
     async function load() {
       setLoading(true);
       try {
-        const [contactsRes, sessionRes] = await Promise.all([contactsAPI.getAll(), blastAPI.getSessions()]);
+        const [contactsRes, sessionRes, policiesRes] = await Promise.allSettled([
+          contactsAPI.getAll(),
+          blastAPI.getSessions(),
+          banditEnabled
+            ? banditAPI.getPolicies().catch(() => ({ data: { success: false, policies: [] } }))
+            : Promise.resolve({ data: { success: false, policies: [] } })
+        ]);
         if (!mounted) return;
 
-        setContactsTotal(contactsRes.data?.length || 0);
-        setSessions((sessionRes.data || []).slice().sort((a, b) => new Date(b.created_at) - new Date(a.created_at)));
+        const contactsData = contactsRes.status === 'fulfilled' ? contactsRes.value.data || [] : [];
+        const sessionsData = sessionRes.status === 'fulfilled' ? sessionRes.value.data || [] : [];
+        const policiesData = policiesRes.status === 'fulfilled' ? policiesRes.value.data : { success: false, policies: [] };
+
+        setContactsTotal(Array.isArray(contactsData) ? contactsData.length : 0);
+        setSessions((sessionsData || []).slice().sort((a, b) => toMillis(b.created_at) - toMillis(a.created_at)));
+
+        if (policiesData?.success && policiesData.policies?.length > 0) {
+          setPolicies(policiesData.policies);
+          setSelectedPolicy(policiesData.policies[0].id);
+        } else {
+          setPolicies([]);
+          setSelectedPolicy(null);
+        }
       } catch (error) {
         if (mounted) {
           setContactsTotal(0);
           setSessions([]);
+          setPolicies([]);
         }
       } finally {
         if (mounted) {
@@ -117,7 +156,9 @@ export default function Dashboard() {
     }
 
     sessions.forEach((session) => {
-      const key = new Date(session.created_at).toISOString().slice(0, 10);
+      const createdAtMillis = toMillis(session.created_at);
+      if (!createdAtMillis) return;
+      const key = new Date(createdAtMillis).toISOString().slice(0, 10);
       if (map.has(key)) {
         map.get(key).sent += session.sent || 0;
       }
@@ -152,7 +193,7 @@ export default function Dashboard() {
     status: session.status,
     contacts: session.total || 0,
     sent: session.sent || 0,
-    time: new Date(session.created_at).toLocaleString('en-US', {
+    time: new Date(toMillis(session.created_at) || Date.now()).toLocaleString('en-US', {
       month: 'short',
       day: 'numeric',
       hour: '2-digit',
@@ -251,6 +292,25 @@ export default function Dashboard() {
           />
         </Card.Body>
       </Card>
+
+      {/* Bandit Analytics Quick Preview */}
+      {policies.length > 0 && (
+        <Row className="g-3 mb-4">
+          <Col>
+            <Card className="border-top border-success border-3">
+              <Card.Header className="bg-light">
+                <div className="d-flex justify-content-between align-items-center">
+                  <strong>🤖 Bandit Analytics Preview</strong>
+                  <a href="/bandit" className="btn btn-sm btn-outline-success">View Full Analytics →</a>
+                </div>
+              </Card.Header>
+              <Card.Body>
+                <BanditAnalytics policyId={selectedPolicy} />
+              </Card.Body>
+            </Card>
+          </Col>
+        </Row>
+      )}
     </div>
   );
 }

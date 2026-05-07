@@ -1,212 +1,366 @@
-const db = require('../db/database');
+const { admin, getFirestore } = require('./firebaseAdmin');
 
-// Simple Contextual LinUCB-like implementation with Sherman-Morrison updates
-// Stores policy state in DB as JSON to survive restarts.
-
+const STORAGE_PROVIDER = (process.env.STORAGE_PROVIDER || 'firebase').toLowerCase();
 const DEFAULT_ALPHA = parseFloat(process.env.BANDIT_ALPHA) || 1.0;
 const DEFAULT_LAMBDA = parseFloat(process.env.BANDIT_LAMBDA) || 1.0;
+
+function ensureFirebaseMode() {
+  if (STORAGE_PROVIDER !== 'firebase') {
+    throw new Error('Bandit service is configured for Firebase storage mode only.');
+  }
+}
+
+function normalizePhone(phone) {
+  if (!phone) return '';
+  return String(phone)
+    .replace(/@c\.us$/i, '')
+    .replace(/@g\.us$/i, '')
+    .replace(/@lid$/i, '')
+    .replace(/@.*$/i, '')
+    .replace(/^\+/, '')
+    .replace(/[^\d]/g, '');
+}
 
 function zeros(n) {
   return Array.from({ length: n }, () => 0.0);
 }
 
-function eye(n, val = 1.0) {
-  const m = Array.from({ length: n }, () => zeros(n));
-  for (let i = 0; i < n; i++) m[i][i] = val;
-  return m;
+function eye(n, value = 1.0) {
+  const matrix = Array.from({ length: n }, () => zeros(n));
+  for (let i = 0; i < n; i += 1) matrix[i][i] = value;
+  return matrix;
 }
 
-function matVecMul(mat, vec) {
-  const n = mat.length;
-  const out = zeros(n);
-  for (let i = 0; i < n; i++) {
-    let s = 0;
-    for (let j = 0; j < vec.length; j++) s += mat[i][j] * vec[j];
-    out[i] = s;
+function matVecMul(matrix, vec) {
+  const out = zeros(matrix.length);
+  for (let i = 0; i < matrix.length; i += 1) {
+    let sum = 0;
+    for (let j = 0; j < vec.length; j += 1) sum += matrix[i][j] * vec[j];
+    out[i] = sum;
   }
   return out;
 }
 
 function vecDot(a, b) {
-  let s = 0;
-  for (let i = 0; i < a.length; i++) s += a[i] * b[i];
-  return s;
+  let sum = 0;
+  for (let i = 0; i < a.length; i += 1) sum += a[i] * b[i];
+  return sum;
 }
 
-function outer(a, b) {
-  const n = a.length;
-  const m = b.length;
-  const out = Array.from({ length: n }, () => Array.from({ length: m }, () => 0.0));
-  for (let i = 0; i < n; i++) for (let j = 0; j < m; j++) out[i][j] = a[i] * b[j];
-  return out;
+async function nextNumericId(counterKey) {
+  const db = getFirestore();
+  const ref = db.collection('_counters').doc(counterKey);
+  const id = await db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    const current = snap.exists ? Number(snap.data().value || 0) : 0;
+    const next = current + 1;
+    tx.set(ref, { value: next, updated_at: admin.firestore.Timestamp.now() }, { merge: true });
+    return next;
+  });
+  return id;
 }
 
-function matSub(A, B) {
-  const n = A.length;
-  const m = A[0].length;
-  const out = Array.from({ length: n }, () => Array.from({ length: m }, () => 0.0));
-  for (let i = 0; i < n; i++) for (let j = 0; j < m; j++) out[i][j] = A[i][j] - B[i][j];
-  return out;
-}
-
-function scalarOuterDiv(v, denom) {
-  const n = v.length;
-  const out = Array.from({ length: n }, () => Array.from({ length: n }, () => 0.0));
-  for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) out[i][j] = (v[i] * v[j]) / denom;
-  return out;
-}
-
-function vecAdd(a, b) {
-  const out = zeros(a.length);
-  for (let i = 0; i < a.length; i++) out[i] = a[i] + b[i];
-  return out;
-}
-
-function scalarMulVec(scalar, v) {
-  const out = zeros(v.length);
-  for (let i = 0; i < v.length; i++) out[i] = scalar * v[i];
-  return out;
+function parsePolicy(doc) {
+  if (!doc || !doc.exists) return null;
+  const data = doc.data() || {};
+  return {
+    id: Number(doc.id),
+    name: data.name || 'policy',
+    arms: Number(data.arms || 2),
+    feature_names: Array.isArray(data.feature_names) ? data.feature_names : [],
+    arm_definitions: Array.isArray(data.arm_definitions) ? data.arm_definitions : [],
+    policy_state: data.policy_state || {
+      arms_state: [],
+      alpha: DEFAULT_ALPHA,
+      lambda: DEFAULT_LAMBDA,
+    },
+    created_at: data.created_at,
+    updated_at: data.updated_at,
+  };
 }
 
 async function createPolicy(name = 'policy', arms = 2, featureNames = [], alpha = DEFAULT_ALPHA, lambda = DEFAULT_LAMBDA) {
-  const d = featureNames.length;
-  // initialize arms state
-  const arms_state = [];
-  for (let a = 0; a < arms; a++) {
-    // A_inv initialized as (1/lambda) * I
-    const A_inv = eye(d, 1.0 / lambda);
-    const b = zeros(d);
-    arms_state.push({ A_inv, b });
+  ensureFirebaseMode();
+
+  const safeArms = Math.max(2, Number(arms) || 2);
+  const features = Array.isArray(featureNames) ? featureNames : [];
+  const dim = features.length;
+
+  const armsState = [];
+  for (let i = 0; i < safeArms; i += 1) {
+    armsState.push({
+      A_inv: eye(dim, 1.0 / lambda),
+      b: zeros(dim),
+    });
   }
 
-  const policy_state = { arms_state, alpha, lambda };
+  const policyId = await nextNumericId('bandit_policies');
+  const now = admin.firestore.Timestamp.now();
+  const payload = {
+    name,
+    arms: safeArms,
+    feature_names: features,
+    arm_definitions: [],
+    policy_state: {
+      arms_state: armsState,
+      alpha: Number(alpha) || DEFAULT_ALPHA,
+      lambda: Number(lambda) || DEFAULT_LAMBDA,
+    },
+    created_at: now,
+    updated_at: now,
+  };
 
-  const stmt = db.prepare(`INSERT INTO bandit_policies (name, arms, feature_names, policy_state) VALUES (?, ?, ?, ?)`);
-  const info = stmt.run(name, arms, JSON.stringify(featureNames || []), JSON.stringify(policy_state));
-  return { id: info.lastInsertRowid, name, arms, featureNames };
+  await getFirestore().collection('bandit_policies').doc(String(policyId)).set(payload);
+  return { id: policyId, name, arms: safeArms, featureNames: features };
 }
 
-function getPolicyRow(policyId) {
-  return db.prepare('SELECT * FROM bandit_policies WHERE id = ?').get(policyId);
+async function getPolicyRow(policyId) {
+  ensureFirebaseMode();
+  const doc = await getFirestore().collection('bandit_policies').doc(String(policyId)).get();
+  return parsePolicy(doc);
 }
 
-function listPolicies() {
-  return db.prepare('SELECT id, name, arms, feature_names, created_at, updated_at FROM bandit_policies ORDER BY created_at DESC').all();
-}
-
-function parsePolicy(row) {
-  if (!row) return null;
-  let feature_names = [];
-  try { feature_names = row.feature_names ? JSON.parse(row.feature_names) : []; } catch (e) { feature_names = []; }
-  let policy_state = { arms_state: [], alpha: DEFAULT_ALPHA, lambda: DEFAULT_LAMBDA };
-  try { policy_state = row.policy_state ? JSON.parse(row.policy_state) : policy_state; } catch (e) { }
-  return { id: row.id, name: row.name, arms: row.arms, feature_names, policy_state };
+async function listPolicies() {
+  ensureFirebaseMode();
+  const snap = await getFirestore().collection('bandit_policies').orderBy('created_at', 'desc').get();
+  return snap.docs.map((doc) => {
+    const row = parsePolicy(doc);
+    return {
+      id: row.id,
+      name: row.name,
+      arms: row.arms,
+      feature_names: row.feature_names,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    };
+  });
 }
 
 async function recommend(policyId, context = {}, sessionId = null, phone = null) {
-  const row = getPolicyRow(policyId);
-  if (!row) throw new Error('Policy not found');
-  const policy = parsePolicy(row);
+  ensureFirebaseMode();
 
-  const featureNames = policy.feature_names || [];
-  const d = featureNames.length;
-  const x = zeros(d);
-  for (let i = 0; i < d; i++) {
-    const key = featureNames[i];
-    const v = context && context.hasOwnProperty(key) ? Number(context[key]) : 0.0;
-    x[i] = isNaN(v) ? 0.0 : v;
-  }
+  const policy = await getPolicyRow(policyId);
+  if (!policy) throw new Error('Policy not found');
 
-  // For each arm compute p = x^T theta + alpha * sqrt(x^T A_inv x)
-  const { arms_state, alpha } = policy.policy_state;
-  let best = { arm: 0, score: -Infinity };
-  for (let a = 0; a < arms_state.length; a++) {
-    const { A_inv, b } = arms_state[a];
-    const theta = matVecMul(A_inv, b);
-    const xAinv = matVecMul(A_inv, x);
-    const uncertainty = Math.sqrt(Math.max(0, vecDot(x, xAinv)));
-    const score = vecDot(x, theta) + (alpha || DEFAULT_ALPHA) * uncertainty;
-    if (score > best.score) {
-      best = { arm: a, score };
+  const features = policy.feature_names || [];
+  const x = features.map((key) => {
+    const value = Object.prototype.hasOwnProperty.call(context || {}, key) ? Number(context[key]) : 0;
+    return Number.isFinite(value) ? value : 0;
+  });
+
+  const state = policy.policy_state || { arms_state: [] };
+  const armsState = Array.isArray(state.arms_state) ? state.arms_state : [];
+  const alpha = Number(state.alpha) || DEFAULT_ALPHA;
+
+  let bestArm = 0;
+  let bestScore = Number.NEGATIVE_INFINITY;
+
+  for (let i = 0; i < armsState.length; i += 1) {
+    const arm = armsState[i];
+    const AInv = arm.A_inv || eye(x.length, 1.0 / DEFAULT_LAMBDA);
+    const b = arm.b || zeros(x.length);
+    const theta = matVecMul(AInv, b);
+    const xAInv = matVecMul(AInv, x);
+    const uncertainty = Math.sqrt(Math.max(0, vecDot(x, xAInv)));
+    const score = vecDot(x, theta) + alpha * uncertainty;
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestArm = i;
     }
   }
 
-  // Insert event with null reward (to be updated later via feedback)
-  const insert = db.prepare('INSERT INTO bandit_events (policy_id, phone, context, arm, reward, session_id) VALUES (?, ?, ?, ?, NULL, ?)');
-  const info = insert.run(policyId, phone || null, JSON.stringify(context || {}), best.arm, sessionId || null);
+  const eventId = await nextNumericId('bandit_events');
+  await getFirestore().collection('bandit_events').doc(String(eventId)).set({
+    policy_id: Number(policyId),
+    phone: normalizePhone(phone) || null,
+    context: context || {},
+    arm: bestArm,
+    reward: null,
+    session_id: sessionId || null,
+    delivery_status: null,
+    read_status: 0,
+    reply_received: 0,
+    auto_reward_applied: 0,
+    created_at: admin.firestore.Timestamp.now(),
+    updated_at: admin.firestore.Timestamp.now(),
+  });
 
-  return { eventId: info.lastInsertRowid, arm: best.arm };
+  return { eventId, arm: bestArm };
 }
 
-function persistPolicyState(policyId, policy_state) {
-  const stmt = db.prepare('UPDATE bandit_policies SET policy_state = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?');
-  stmt.run(JSON.stringify(policy_state), policyId);
+async function persistPolicyState(policyId, policyState) {
+  await getFirestore().collection('bandit_policies').doc(String(policyId)).set(
+    {
+      policy_state: policyState,
+      updated_at: admin.firestore.Timestamp.now(),
+    },
+    { merge: true }
+  );
 }
 
 async function feedback(eventId, reward = 0) {
-  const ev = db.prepare('SELECT * FROM bandit_events WHERE id = ?').get(eventId);
-  if (!ev) throw new Error('Event not found');
+  ensureFirebaseMode();
+
+  const db = getFirestore();
+  const eventRef = db.collection('bandit_events').doc(String(eventId));
+  const eventDoc = await eventRef.get();
+  if (!eventDoc.exists) throw new Error('Event not found');
+
+  const ev = eventDoc.data() || {};
   if (ev.reward !== null && ev.reward !== undefined) {
-    // already has feedback - do not overwrite
     return { updated: false, reason: 'already_set' };
   }
 
-  // parse context
-  let context = {};
-  try { context = ev.context ? JSON.parse(ev.context) : {}; } catch (e) { context = {}; }
+  const policy = await getPolicyRow(ev.policy_id);
+  if (!policy) throw new Error('Policy for event not found');
 
-  const row = getPolicyRow(ev.policy_id);
-  if (!row) throw new Error('Policy for event not found');
-  const policy = parsePolicy(row);
   const featureNames = policy.feature_names || [];
-  const d = featureNames.length;
-  const x = zeros(d);
-  for (let i = 0; i < d; i++) {
-    const key = featureNames[i];
-    const v = context && context.hasOwnProperty(key) ? Number(context[key]) : 0.0;
-    x[i] = isNaN(v) ? 0.0 : v;
-  }
+  const context = ev.context || {};
+  const x = featureNames.map((key) => {
+    const value = Object.prototype.hasOwnProperty.call(context, key) ? Number(context[key]) : 0;
+    return Number.isFinite(value) ? value : 0;
+  });
 
-  const arms_state = policy.policy_state.arms_state;
+  const armsState = policy.policy_state.arms_state || [];
   const armIdx = Number(ev.arm);
-  if (!arms_state[armIdx]) throw new Error('Arm state missing');
+  if (!armsState[armIdx]) throw new Error('Arm state missing');
 
-  // Sherman-Morrison update for A_inv: A_inv <- A_inv - (A_inv x x^T A_inv) / (1 + x^T A_inv x)
-  const A_inv = arms_state[armIdx].A_inv;
-  const b = arms_state[armIdx].b;
+  const AInv = armsState[armIdx].A_inv || eye(x.length, 1.0 / DEFAULT_LAMBDA);
+  const b = armsState[armIdx].b || zeros(x.length);
 
-  const v = matVecMul(A_inv, x); // v = A_inv * x
+  const v = matVecMul(AInv, x);
   const denom = 1 + Math.max(0, vecDot(x, v));
-  const numer = outer(v, v); // v v^T
 
-  // Update A_inv in place
-  for (let i = 0; i < d; i++) {
-    for (let j = 0; j < d; j++) {
-      const delta = numer[i][j] / denom;
-      A_inv[i][j] = A_inv[i][j] - delta;
+  for (let i = 0; i < x.length; i += 1) {
+    for (let j = 0; j < x.length; j += 1) {
+      AInv[i][j] -= (v[i] * v[j]) / denom;
     }
   }
 
-  // b <- b + reward * x
-  const deltaB = scalarMulVec(Number(reward), x);
-  for (let i = 0; i < d; i++) b[i] = (b[i] || 0) + deltaB[i];
+  const numericReward = Number(reward) || 0;
+  for (let i = 0; i < x.length; i += 1) {
+    b[i] = Number(b[i] || 0) + numericReward * x[i];
+  }
 
-  // persist updated policy state
-  policy.policy_state.arms_state[armIdx].A_inv = A_inv;
-  policy.policy_state.arms_state[armIdx].b = b;
-  persistPolicyState(policy.id, policy.policy_state);
+  armsState[armIdx] = { A_inv: AInv, b };
+  policy.policy_state.arms_state = armsState;
 
-  // update event reward
-  db.prepare('UPDATE bandit_events SET reward = ? WHERE id = ?').run(reward, eventId);
+  await persistPolicyState(policy.id, policy.policy_state);
+  await eventRef.set({ reward: numericReward, updated_at: admin.firestore.Timestamp.now() }, { merge: true });
 
   return { ok: true };
 }
 
-function listEvents(limit = 200, policyId = null) {
-  const stmt = policyId
-    ? db.prepare('SELECT * FROM bandit_events WHERE policy_id = ? ORDER BY created_at DESC LIMIT ?')
-    : db.prepare('SELECT * FROM bandit_events ORDER BY created_at DESC LIMIT ?');
-  return policyId ? stmt.all(policyId, limit) : stmt.all(limit);
+async function listEvents(limit = 200, policyId = null) {
+  ensureFirebaseMode();
+
+  const safeLimit = Math.max(1, Math.min(Number(limit) || 200, 1000));
+  let query = getFirestore().collection('bandit_events');
+  if (policyId !== null && policyId !== undefined) {
+    query = query.where('policy_id', '==', Number(policyId));
+  }
+  const snap = await query.orderBy('created_at', 'desc').limit(safeLimit).get();
+
+  return snap.docs.map((doc) => ({ id: Number(doc.id), ...doc.data() }));
+}
+
+function getAutoReward(deliveryStatus, readStatus, replyReceived) {
+  let reward = 0;
+
+  if (deliveryStatus === 'failed') reward = -0.5;
+  else if (deliveryStatus === 'sent') reward = 0.5;
+  else if (deliveryStatus === 'delivered') reward = 0.8;
+
+  if (Number(readStatus) === 1) reward += 0.3;
+  if (Number(replyReceived) === 1) reward += 1.0;
+
+  return reward;
+}
+
+async function updateEventDeliveryStatus(eventId, deliveryStatus, readStatus = 0, replyReceived = 0) {
+  ensureFirebaseMode();
+
+  const db = getFirestore();
+  const ref = db.collection('bandit_events').doc(String(eventId));
+  const doc = await ref.get();
+  if (!doc.exists) throw new Error('Event not found');
+
+  const current = doc.data() || {};
+  const autoReward = getAutoReward(deliveryStatus, readStatus, replyReceived);
+
+  if (current.reward === null || current.reward === undefined) {
+    await feedback(eventId, autoReward);
+  }
+
+  await ref.set(
+    {
+      delivery_status: deliveryStatus,
+      read_status: Number(readStatus) || 0,
+      reply_received: Number(replyReceived) || 0,
+      auto_reward_applied: 1,
+      updated_at: admin.firestore.Timestamp.now(),
+    },
+    { merge: true }
+  );
+
+  return { eventId: Number(eventId), autoReward, deliveryStatus };
+}
+
+async function getArmAnalytics(policyId) {
+  ensureFirebaseMode();
+
+  const policy = await getPolicyRow(policyId);
+  if (!policy) throw new Error('Policy not found');
+
+  const events = await listEvents(1000, Number(policyId));
+  const armStats = {};
+
+  for (let arm = 0; arm < policy.arms; arm += 1) {
+    const armEvents = events.filter((event) => Number(event.arm) === arm);
+    const rewards = armEvents
+      .map((event) => event.reward)
+      .filter((value) => value !== null && value !== undefined)
+      .map((value) => Number(value) || 0);
+
+    const totalReward = rewards.reduce((sum, value) => sum + value, 0);
+
+    armStats[arm] = {
+      arm_id: arm,
+      total_recommendations: armEvents.length,
+      total_reward: totalReward,
+      avg_reward: rewards.length ? totalReward / rewards.length : 0,
+      successful_count: armEvents.filter((event) => event.delivery_status === 'delivered' || event.delivery_status === 'sent').length,
+      failed_count: armEvents.filter((event) => event.delivery_status === 'failed').length,
+      read_count: armEvents.filter((event) => Number(event.read_status) === 1).length,
+      reply_count: armEvents.filter((event) => Number(event.reply_received) === 1).length,
+      pending_count: armEvents.filter((event) => event.reward === null || event.reward === undefined).length,
+    };
+  }
+
+  return armStats;
+}
+
+async function defineArms(policyId, armDefinitions) {
+  ensureFirebaseMode();
+  if (!Array.isArray(armDefinitions)) throw new Error('armDefinitions must be an array');
+
+  await getFirestore().collection('bandit_policies').doc(String(policyId)).set(
+    {
+      arm_definitions: armDefinitions,
+      updated_at: admin.firestore.Timestamp.now(),
+    },
+    { merge: true }
+  );
+
+  return { policyId: Number(policyId), armDefinitions };
+}
+
+async function getArmDefinitions(policyId) {
+  ensureFirebaseMode();
+  const policy = await getPolicyRow(policyId);
+  if (!policy) throw new Error('Policy not found');
+  return Array.isArray(policy.arm_definitions) ? policy.arm_definitions : [];
 }
 
 module.exports = {
@@ -216,4 +370,9 @@ module.exports = {
   listPolicies,
   listEvents,
   getPolicyRow,
+  getAutoReward,
+  updateEventDeliveryStatus,
+  getArmAnalytics,
+  defineArms,
+  getArmDefinitions,
 };

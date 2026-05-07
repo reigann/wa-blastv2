@@ -25,6 +25,10 @@ db/*.sqlite3
 # Uploads
 uploads/
 
+# Secrets
+backend/secrets/
+secrets/
+
 # IDE
 .vscode/
 .idea/

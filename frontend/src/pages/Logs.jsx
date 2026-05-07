@@ -4,6 +4,7 @@ import Papa from 'papaparse';
 import PageHeader from '../components/PageHeader';
 import StatusBadge from '../components/StatusBadge';
 import { blastAPI } from '../services/api';
+import { toMillis } from '../lib/datetime';
 
 const rowHeight = 66;
 
@@ -60,7 +61,7 @@ export default function Logs() {
       setEntries(
         logsPerSession
           .flat()
-          .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)),
+          .sort((a, b) => toMillis(b.timestamp) - toMillis(a.timestamp)),
       );
     } catch (error) {
       setEntries([]);
@@ -75,7 +76,7 @@ export default function Logs() {
       const matchQuery = text.includes(query.toLowerCase());
       const matchLevel = levelFilter === 'ALL' || level === levelFilter;
 
-      const entryDate = new Date(entry.timestamp);
+      const entryDate = new Date(toMillis(entry.timestamp) || 0);
       const fromOk = !dateFrom || entryDate >= new Date(dateFrom);
       const toOk = !dateTo || entryDate <= new Date(`${dateTo}T23:59:59`);
 
@@ -179,7 +180,7 @@ export default function Logs() {
                   </div>
 
                   <div className="flex-grow-1">
-                    <div className="log-time text-secondary">{new Date(entry.timestamp).toLocaleString()}</div>
+                    <div className="log-time text-secondary">{new Date(toMillis(entry.timestamp) || Date.now()).toLocaleString()}</div>
                     <div className="fw-medium">{entry.message}</div>
                     {isOpen && entry.stack ? <pre className="small mt-2 mb-0">{entry.stack}</pre> : null}
                   </div>
