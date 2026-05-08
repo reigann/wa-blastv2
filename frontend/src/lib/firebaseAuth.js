@@ -2,11 +2,15 @@ import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, signInWithPopup } from 'firebase/auth';
 
 const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-  appId: import.meta.env.VITE_FIREBASE_APP_ID,
+  apiKey: "AIzaSyBZSLXNR1UscI7MhUb8WNE3fBeyM3qU0P4",
+  authDomain: "whatsappblaster-c2d77.firebaseapp.com",
+  projectId: "whatsappblaster-c2d77",
+  storageBucket: "whatsappblaster-c2d77.firebasestorage.app",
+  messagingSenderId: "1046972650630",
+  appId: "1:1046972650630:web:1b7c1703519f59661f2d07",
+  measurementId: "G-T5YZHZXGQK"
 };
+
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
