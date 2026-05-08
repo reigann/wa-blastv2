@@ -41,7 +41,6 @@ function emitStatus(username) {
   if (!io) return;
   const state = getState(username, false);
   const status = state?.status || 'disconnected';
-  // Emit basic status string for backward compatibility
   io.to(roomForUser(username)).emit('wa:status', status);
   if (state?.qr) {
     io.to(roomForUser(username)).emit('wa:qr', state.qr);
@@ -54,25 +53,14 @@ function extractPhoneFromClient(client) {
     const me = client.info && client.info.me ? client.info.me : null;
     if (!me) return null;
 
-    // me may be an object or string; attempt common shapes
-    if (typeof me === 'string') {
-      return me.replace('@c.us', '');
-    }
-
-    if (me._serialized) {
-      return String(me._serialized).replace('@c.us', '');
-    }
-
-    if (me.id && me.id.user) {
-      return String(me.id.user).replace('@c.us', '');
-    }
-
-    if (me.user) {
-      return String(me.user).replace('@c.us', '');
-    }
+    if (typeof me === 'string') return me.replace('@c.us', '');
+    if (me._serialized) return String(me._serialized).replace('@c.us', '');
+    if (me.id && me.id.user) return String(me.id.user).replace('@c.us', '');
+    if (me.user) return String(me.user).replace('@c.us', '');
 
     return null;
   } catch (err) {
+    console.warn('[WA] extractPhoneFromClient error:', err?.message);
     return null;
   }
 }
@@ -81,6 +69,7 @@ function scheduleReconnect(username, delay = 5000) {
   const state = getState(username);
   if (state.reconnectTimer) return;
 
+  console.warn(`[WA] Scheduling reconnect for ${username} in ${delay}ms`);
   state.reconnectTimer = setTimeout(async () => {
     state.reconnectTimer = null;
     await ensureWhatsAppClient(username);
@@ -94,10 +83,147 @@ async function cleanupClient(username) {
   try {
     await state.client.destroy();
   } catch (err) {
-    // ignore destroy errors
+    // FIX 2: log instead of silently ignore
+    console.warn('[WA] cleanupClient destroy error:', err?.message);
   }
 
   state.client = null;
+}
+
+// FIX 1: message handler extracted outside of 'ready' to prevent duplicate listeners on reconnect
+function registerMessageHandlers(client, username) {
+  client.on('message', async (msg) => {
+    try {
+      if (!msg) return;
+      if (msg.fromMe) return;
+
+      let sender = msg.from || null;
+      if (sender && sender.endsWith('@g.us') && msg.author) {
+        sender = msg.author;
+      }
+      if (!sender) return;
+
+      const text = (msg.body || '').trim();
+
+      try {
+        db.prepare(`INSERT INTO blast_interactions (session_id, phone, action_type, payload) VALUES (?, ?, ?, ?)`)
+          .run(null, sender, 'reply', JSON.stringify({ text }));
+      } catch (e) {
+        console.warn('[WA] blast_interactions insert error:', e?.message);
+      }
+
+      try {
+        const keywords = {
+          'Teknik Informatika': ['informatika', 'ti', 'teknik informatika', 'programming', 'coding'],
+          'Manajemen': ['manajemen', 'bisnis', 'management'],
+          'Akuntansi': ['akuntansi', 'accounting'],
+          'Teknik Elektro': ['elektro', 'elektronika', 'teknik elektro'],
+          'Sistem Informasi': ['sistem informasi', 'si'],
+        };
+
+        const lower = text.toLowerCase();
+        const scores = {};
+        Object.entries(keywords).forEach(([dept, keys]) => {
+          scores[dept] = keys.reduce((acc, k) => acc + (lower.includes(k) ? 1 : 0), 0);
+        });
+
+        const best = Object.entries(scores).sort((a, b) => b[1] - a[1])[0];
+        if (best && best[1] > 0) {
+          const inferred = best[0];
+          const phonePlain = sender.replace('@c.us', '');
+          db.prepare(`UPDATE contacts SET minat_prodi=? WHERE phone LIKE ?`).run(inferred, `%${phonePlain}%`);
+        }
+      } catch (e) {
+        console.warn('[WA] minat_prodi inference error:', e?.message);
+      }
+
+      // FIX 4: added 48-hour time window to prevent rewarding old blast events
+      const rows = db.prepare(`
+        SELECT * FROM bandit_events 
+        WHERE phone = ? AND reward IS NULL 
+        AND created_at > datetime('now', '-48 hours')
+        ORDER BY created_at DESC
+      `).all(sender);
+
+      if (!rows || rows.length === 0) {
+        console.log(`[Bandit] No pending events found for reply from: ${sender}`);
+        return;
+      }
+
+      console.log(`[Bandit] Found ${rows.length} pending events for reply from: ${sender}`);
+
+      const windowHours = Number(process.env.BANDIT_FEEDBACK_WINDOW_HOURS) || 24;
+      const now = Date.now();
+
+      for (const ev of rows) {
+        const created = new Date(ev.created_at);
+        const hours = (now - created.getTime()) / (1000 * 60 * 60);
+        if (hours <= windowHours) {
+          try {
+            console.log(`[Bandit] Processing reply for event ${ev.id}`);
+            db.prepare(`UPDATE bandit_events SET reply_received = 1 WHERE id = ?`).run(ev.id);
+            console.log(`[Bandit] Event ${ev.id} marked as replied`);
+
+            const res = await banditService.feedback(ev.id, 1);
+            console.log(`[Bandit] Event ${ev.id} auto-rewarded for reply`);
+            if (io) io.to(roomForUser(username)).emit('bandit:auto_feedback', { eventId: ev.id, phone: sender, reward: 1, result: res });
+          } catch (err) {
+            console.error('[Bandit] feedback error:', err?.message || err);
+          }
+        }
+      }
+    } catch (err) {
+      console.error('[WA] Auto-feedback listener error:', err?.message || err);
+    }
+  });
+
+  client.on('message_ack', async (msg, ack) => {
+    try {
+      if (!msg || !msg.to) return;
+
+      const to = msg.to.replace('@c.us', '').replace('@g.us', '');
+      console.log(`[Bandit] Message ACK - phone: ${to}, ack level: ${ack}`);
+
+      // FIX 4: added 48-hour time window to prevent matching old blast events
+      const events = db.prepare(`
+        SELECT * FROM bandit_events 
+        WHERE phone LIKE ? 
+        AND created_at > datetime('now', '-48 hours')
+        ORDER BY created_at DESC LIMIT 5
+      `).all(`%${to}%`);
+
+      if (events.length === 0) {
+        console.log(`[Bandit] No recent events found for phone: ${to}`);
+        return;
+      }
+
+      console.log(`[Bandit] Found ${events.length} events for phone: ${to}`);
+
+      for (const ev of events) {
+        console.log(`[Bandit] Updating event ${ev.id} - ack: ${ack}`);
+
+        if (ack >= 2) {
+          db.prepare(`UPDATE bandit_events SET delivery_status = 'delivered' WHERE id = ?`).run(ev.id);
+          console.log(`[Bandit] Event ${ev.id} marked as delivered`);
+        }
+        if (ack >= 3) {
+          db.prepare(`UPDATE bandit_events SET read_status = 1 WHERE id = ?`).run(ev.id);
+          console.log(`[Bandit] Event ${ev.id} marked as read`);
+
+          if (process.env.BANDIT_ENABLED === 'true') {
+            try {
+              await banditService.updateEventDeliveryStatus(ev.id, 'delivered', 1, 0);
+              console.log(`[Bandit] Event ${ev.id} auto-rewarded for read`);
+            } catch (err) {
+              console.warn('[Bandit] Failed to auto-reward read:', err?.message);
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error('[Bandit] Message ack listener error:', err?.message || err);
+    }
+  });
 }
 
 async function ensureWhatsAppClient(username) {
@@ -120,8 +246,9 @@ async function ensureWhatsAppClient(username) {
   const client = new Client({
     authStrategy: new LocalAuth({ clientId: `wa-${sanitizeClientId(username)}` }),
     puppeteer: {
-      headless: true,
-      args: [
+    headless: true,
+    executablePath: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+    args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-dev-shm-usage',
@@ -142,17 +269,20 @@ async function ensureWhatsAppClient(username) {
   });
 
   client.on('loading_screen', () => {
+    console.log(`[WA] Loading screen for ${username}`);
     state.status = 'connecting';
     emitStatus(username);
   });
 
   client.on('authenticated', () => {
+    console.log(`[WA] Authenticated for ${username}`);
     state.status = 'connecting';
     state.qr = null;
     emitStatus(username);
   });
 
   client.on('ready', () => {
+    console.log(`[WA] Client ready for ${username}`);
     state.status = 'connected';
     state.qr = null;
     emitStatus(username);
@@ -160,153 +290,23 @@ async function ensureWhatsAppClient(username) {
     if (io) {
       io.to(roomForUser(username)).emit('wa:ready', { message: 'WhatsApp connected successfully!', phone });
     }
-    // Auto-feedback + interaction logging: listen to incoming messages and submit reward to bandit
-    client.on('message', async (msg) => {
-      try {
-        if (!msg) return;
-        // ignore messages sent by this client
-        if (msg.fromMe) return;
-
-        // Determine sender (handle group messages)
-        let sender = msg.from || null;
-        if (sender && sender.endsWith('@g.us') && msg.author) {
-          sender = msg.author;
-        }
-        if (!sender) return;
-
-        const text = (msg.body || '').trim();
-
-        // Log interaction into blast_interactions for later analysis
-        try {
-          db.prepare(`INSERT INTO blast_interactions (session_id, phone, action_type, payload) VALUES (?, ?, ?, ?)`)
-            .run(null, sender, 'reply', JSON.stringify({ text }));
-        } catch (e) {
-          // ignore insert errors
-        }
-
-        // Simple keyword-based inference to update contacts.minat_prodi
-        try {
-          const keywords = {
-            'Teknik Informatika': ['informatika', 'ti', 'teknik informatika', 'programming', 'coding'],
-            'Manajemen': ['manajemen', 'bisnis', 'management'],
-            'Akuntansi': ['akuntansi', 'accounting'],
-            'Teknik Elektro': ['elektro', 'elektronika', 'teknik elektro'],
-            'Sistem Informasi': ['sistem informasi', 'si'],
-          };
-
-          const lower = text.toLowerCase();
-          const scores = {};
-          Object.entries(keywords).forEach(([dept, keys]) => {
-            scores[dept] = keys.reduce((acc, k) => acc + (lower.includes(k) ? 1 : 0), 0);
-          });
-
-          // pick highest score >0
-          const best = Object.entries(scores).sort((a,b)=>b[1]-a[1])[0];
-          if (best && best[1] > 0) {
-            const inferred = best[0];
-            // update contacts table if phone exists
-            const phonePlain = sender.replace('@c.us','');
-            db.prepare(`UPDATE contacts SET minat_prodi=? WHERE phone LIKE ?`).run(inferred, `%${phonePlain}%`);
-          }
-        } catch (e) {
-          // ignore inference errors
-        }
-
-        // Find pending bandit events for this phone
-        const rows = db.prepare('SELECT * FROM bandit_events WHERE phone = ? AND reward IS NULL ORDER BY created_at DESC').all(sender);
-        if (!rows || rows.length === 0) {
-          console.log(`[Bandit] No pending events found for reply from: ${sender}`);
-          return;
-        }
-
-        console.log(`[Bandit] Found ${rows.length} pending events for reply from: ${sender}`);
-
-        const windowHours = Number(process.env.BANDIT_FEEDBACK_WINDOW_HOURS) || 24;
-        const now = Date.now();
-
-        for (const ev of rows) {
-          const created = new Date(ev.created_at);
-          const hours = (now - created.getTime()) / (1000 * 60 * 60);
-          if (hours <= windowHours) {
-            try {
-              console.log(`[Bandit] Processing reply for event ${ev.id}`);
-              // Mark as replied
-              db.prepare(`UPDATE bandit_events SET reply_received = 1 WHERE id = ?`).run(ev.id);
-              console.log(`[Bandit] Event ${ev.id} marked as replied`);
-              
-              // Auto-apply reward for reply
-              const res = await banditService.feedback(ev.id, 1);
-              console.log(`[Bandit] Event ${ev.id} auto-rewarded for reply`);
-              if (io) io.to(roomForUser(username)).emit('bandit:auto_feedback', { eventId: ev.id, phone: sender, reward: 1, result: res });
-            } catch (err) {
-              console.error('bandit feedback error:', err?.message || err);
-            }
-          }
-        }
-
-      } catch (err) {
-        console.error('Auto-feedback listener error:', err?.message || err);
-      }
-    });
-
-    // Track message status changes (delivered, read) for bandit events
-    client.on('message_ack', async (msg, ack) => {
-      try {
-        if (!msg || !msg.to) return;
-        
-        // ack levels: 1=sent, 2=delivered, 3=read, 4=played (for audio/video)
-        const to = msg.to.replace('@c.us', '').replace('@g.us', '');
-        
-        console.log(`[Bandit] Message ACK - phone: ${to}, ack level: ${ack}`);
-        
-        // Find bandit events for this recipient - try multiple formats
-        let events = db.prepare('SELECT * FROM bandit_events WHERE phone LIKE ? ORDER BY created_at DESC LIMIT 5').all(`%${to}%`);
-        
-        if (events.length === 0) {
-          console.log(`[Bandit] No events found for phone: ${to}`);
-          return;
-        }
-        
-        console.log(`[Bandit] Found ${events.length} events for phone: ${to}`);
-        
-        for (const ev of events) {
-          console.log(`[Bandit] Updating event ${ev.id} - ack: ${ack}`);
-          
-          if (ack >= 2) {
-            // Delivered or better
-            db.prepare(`UPDATE bandit_events SET delivery_status = 'delivered' WHERE id = ?`).run(ev.id);
-            console.log(`[Bandit] Event ${ev.id} marked as delivered`);
-          }
-          if (ack >= 3) {
-            // Read or better
-            db.prepare(`UPDATE bandit_events SET read_status = 1 WHERE id = ?`).run(ev.id);
-            console.log(`[Bandit] Event ${ev.id} marked as read`);
-            
-            // Auto-apply reward for read
-            if (process.env.BANDIT_ENABLED === 'true') {
-              try {
-                await banditService.updateEventDeliveryStatus(ev.id, 'delivered', 1, 0);
-                console.log(`[Bandit] Event ${ev.id} auto-rewarded for read`);
-              } catch (err) {
-                console.warn('[Bandit] Failed to auto-reward read:', err?.message);
-              }
-            }
-          }
-        }
-      } catch (err) {
-        console.error('[Bandit] Message ack listener error:', err?.message || err);
-      }
-    });
   });
 
+  // FIX 1: register message handlers once here, NOT inside 'ready'
+  registerMessageHandlers(client, username);
+
   client.on('error', (err) => {
+    // FIX 2: log the actual error instead of silently ignoring
+    console.error(`[WA] Client error for ${username}:`, err?.message || err);
     state.status = 'disconnected';
     state.qr = null;
     emitStatus(username);
     scheduleReconnect(username, 3000);
   });
 
-  client.on('auth_failure', () => {
+  client.on('auth_failure', (msg) => {
+    // FIX 2: log auth failure reason
+    console.error(`[WA] Auth failure for ${username}:`, msg);
     state.status = 'disconnected';
     state.qr = null;
     emitStatus(username);
@@ -314,6 +314,8 @@ async function ensureWhatsAppClient(username) {
   });
 
   client.on('disconnected', (reason) => {
+    // FIX 2: log disconnect reason
+    console.warn(`[WA] Client disconnected for ${username}. Reason:`, reason);
     state.status = 'disconnected';
     state.qr = null;
     emitStatus(username);
@@ -328,6 +330,8 @@ async function ensureWhatsAppClient(username) {
   } catch (err) {
     const message = (err && err.message) ? String(err.message) : String(err);
     const lower = message.toLowerCase();
+    // FIX 2: log initialize errors
+    console.error(`[WA] client.initialize error for ${username}:`, message);
     if (
       lower.includes('execution context was destroyed') ||
       lower.includes('target closed') ||
@@ -357,18 +361,16 @@ function setSocketServer(socketIo) {
 
 function getStatus(username) {
   const state = getState(username, false);
-  if (!state) {
-    return { status: 'disconnected', qr: null };
-  }
+  if (!state) return { status: 'disconnected', qr: null };
+
   const basic = { status: state.status, qr: state.qr };
-  // include phone number when connected (best-effort)
   try {
     if (state.client && state.status === 'connected') {
       const phone = extractPhoneFromClient(state.client);
       if (phone) basic.phone = phone;
     }
   } catch (err) {
-    // ignore
+    console.warn('[WA] getStatus phone extraction error:', err?.message);
   }
   return basic;
 }
@@ -408,11 +410,18 @@ async function sendMessage(phone, message, username) {
       throw new Error(`Number ${phone} is not registered on WhatsApp`);
     }
   } catch (err) {
-    // continue and let sendMessage decide
+    // FIX 2: log registration check failure instead of silently continuing
+    console.warn(`[WA] isRegisteredUser check failed for ${phone}:`, err?.message);
   }
 
-  await client.sendMessage(chatId, message);
-  return true;
+  try {
+    await client.sendMessage(chatId, message);
+    console.log(`[WA] Message sent to ${phone}`);
+    return true;
+  } catch (err) {
+    console.error(`[WA] sendMessage failed for ${phone}:`, err?.message);
+    throw err;
+  }
 }
 
 async function sendMessageWithMedia(phone, message, mediaPath, username) {
@@ -427,15 +436,22 @@ async function sendMessageWithMedia(phone, message, mediaPath, username) {
       throw new Error(`Number ${phone} is not registered on WhatsApp`);
     }
   } catch (err) {
-    // continue and let sendMessage decide
+    // FIX 2: log registration check failure
+    console.warn(`[WA] isRegisteredUser check failed for ${phone}:`, err?.message);
   }
 
-  const media = mediaPath.startsWith('http')
-    ? await MessageMedia.fromUrl(mediaPath, { unsafeMime: true })
-    : MessageMedia.fromFilePath(mediaPath);
+  try {
+    const media = mediaPath.startsWith('http')
+      ? await MessageMedia.fromUrl(mediaPath, { unsafeMime: true })
+      : MessageMedia.fromFilePath(mediaPath);
 
-  await client.sendMessage(chatId, media, { caption: message || '' });
-  return true;
+    await client.sendMessage(chatId, media, { caption: message || '' });
+    console.log(`[WA] Media message sent to ${phone}`);
+    return true;
+  } catch (err) {
+    console.error(`[WA] sendMessageWithMedia failed for ${phone}:`, err?.message);
+    throw err;
+  }
 }
 
 async function logout(username) {
@@ -448,12 +464,14 @@ async function logout(username) {
       await state.client.destroy();
     }
   } catch (err) {
-    // ignore
+    // FIX 2: log logout errors
+    console.warn(`[WA] logout error for ${username}:`, err?.message);
   }
 
   state.client = null;
   state.qr = null;
   state.status = 'disconnected';
+  console.log(`[WA] Logged out: ${username}`);
   emitStatus(username);
 }
 
@@ -468,7 +486,8 @@ async function destroyAllClients() {
         await state.client.destroy();
       }
     } catch (err) {
-      // ignore cleanup errors
+      // FIX 2: log destroy errors
+      console.warn(`[WA] destroyAllClients error for ${username}:`, err?.message);
     }
     state.client = null;
     state.qr = null;
