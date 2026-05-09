@@ -256,13 +256,44 @@ async function listEvents(limit = 200, policyId = null) {
   ensureFirebaseMode();
 
   const safeLimit = Math.max(1, Math.min(Number(limit) || 200, 1000));
-  let query = getFirestore().collection('bandit_events');
-  if (policyId !== null && policyId !== undefined) {
-    query = query.where('policy_id', '==', Number(policyId));
+  const db = getFirestore();
+  
+  try {
+    // Try the indexed query first
+    let query = db.collection('bandit_events');
+    if (policyId !== null && policyId !== undefined) {
+      query = query.where('policy_id', '==', Number(policyId));
+    }
+    const snap = await query.orderBy('created_at', 'desc').limit(safeLimit).get();
+    return snap.docs.map((doc) => ({ id: Number(doc.id), ...doc.data() }));
+  } catch (err) {
+    // Fallback: If index doesn't exist, query without filter and sort in memory
+    if (err.code === 9 || err.message.includes('FAILED_PRECONDITION')) {
+      console.warn('[Bandit] Composite index not ready. Using fallback strategy...');
+      
+      // Query all events for this policy (or all events if no filter)
+      let query = db.collection('bandit_events');
+      if (policyId !== null && policyId !== undefined) {
+        query = query.where('policy_id', '==', Number(policyId));
+      }
+      
+      // Get docs without orderBy (no index needed)
+      const snap = await query.limit(safeLimit * 2).get();
+      
+      // Sort in memory
+      const docs = snap.docs
+        .map((doc) => ({ id: Number(doc.id), ...doc.data() }))
+        .sort((a, b) => {
+          const timeA = a.created_at?.toMillis ? a.created_at.toMillis() : 0;
+          const timeB = b.created_at?.toMillis ? b.created_at.toMillis() : 0;
+          return timeB - timeA; // Descending
+        })
+        .slice(0, safeLimit);
+      
+      return docs;
+    }
+    throw err;
   }
-  const snap = await query.orderBy('created_at', 'desc').limit(safeLimit).get();
-
-  return snap.docs.map((doc) => ({ id: Number(doc.id), ...doc.data() }));
 }
 
 function getAutoReward(deliveryStatus, readStatus, replyReceived) {
@@ -316,6 +347,8 @@ async function getArmAnalytics(policyId) {
   const events = await listEvents(1000, Number(policyId));
   const armStats = {};
 
+  console.log(`[Bandit Analytics] Policy: ${policy.name} (ID: ${policyId}), Arms: ${policy.arms}, Total Events: ${events.length}`);
+
   for (let arm = 0; arm < policy.arms; arm += 1) {
     const armEvents = events.filter((event) => Number(event.arm) === arm);
     const rewards = armEvents
@@ -324,20 +357,30 @@ async function getArmAnalytics(policyId) {
       .map((value) => Number(value) || 0);
 
     const totalReward = rewards.reduce((sum, value) => sum + value, 0);
+    const avgReward = rewards.length ? totalReward / rewards.length : 0;
+
+    const successfulCount = armEvents.filter((event) => event.delivery_status === 'delivered' || event.delivery_status === 'sent').length;
+    const failedCount = armEvents.filter((event) => event.delivery_status === 'failed').length;
+    const readCount = armEvents.filter((event) => Number(event.read_status) === 1).length;
+    const replyCount = armEvents.filter((event) => Number(event.reply_received) === 1).length;
+    const pendingCount = armEvents.filter((event) => event.reward === null || event.reward === undefined).length;
 
     armStats[arm] = {
       arm_id: arm,
       total_recommendations: armEvents.length,
-      total_reward: totalReward,
-      avg_reward: rewards.length ? totalReward / rewards.length : 0,
-      successful_count: armEvents.filter((event) => event.delivery_status === 'delivered' || event.delivery_status === 'sent').length,
-      failed_count: armEvents.filter((event) => event.delivery_status === 'failed').length,
-      read_count: armEvents.filter((event) => Number(event.read_status) === 1).length,
-      reply_count: armEvents.filter((event) => Number(event.reply_received) === 1).length,
-      pending_count: armEvents.filter((event) => event.reward === null || event.reward === undefined).length,
+      total_reward: Number(totalReward.toFixed(2)),
+      avg_reward: Number(avgReward.toFixed(3)),
+      successful_count: successfulCount,
+      failed_count: failedCount,
+      read_count: readCount,
+      reply_count: replyCount,
+      pending_count: pendingCount,
     };
+
+    console.log(`[Bandit Analytics] Arm ${arm}: ${armEvents.length} events, Avg Reward: ${avgReward.toFixed(3)}`);
   }
 
+  console.log(`[Bandit Analytics] Result: ${JSON.stringify(armStats)}`);
   return armStats;
 }
 

@@ -18,7 +18,6 @@ const blastRoutes = require('./routes/blast');
 const templateRoutes = require('./routes/templates');
 const clusteringRoutes = require('./routes/clustering');
 const banditRoutes = require('./routes/bandit');
-
 const app = express();
 const httpServer = http.createServer(app);
 const STORAGE_PROVIDER = (process.env.STORAGE_PROVIDER || 'firebase').toLowerCase();
@@ -90,9 +89,13 @@ if (STORAGE_PROVIDER === 'firebase') {
   app.use('/api/templates', requireAuth, templateRoutes);
   app.use('/api/blast', requireAuth, blastRoutes);
   app.use('/api/clustering', requireAuth, clusteringRoutes);
-  app.use('/api/bandit', requireAuth, banditRoutes);
-  console.log('Running in FIREBASE mode: auth, contacts, templates, blast, clustering, and bandit are enabled.');
-} else {
+  
+  // UBAH BARIS INI (Hapus requireAuth)
+  app.use('/api/bandit', banditRoutes); 
+  
+  console.log('Running in FIREBASE mode...');
+}
+ else {
   app.use('/api/contacts', requireAuth, contactRoutes);
   app.use('/api/blast', requireAuth, blastRoutes);
   app.use('/api/templates', requireAuth, templateRoutes);

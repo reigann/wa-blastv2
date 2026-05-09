@@ -93,10 +93,22 @@ router.post('/update-delivery-status', async (req, res) => {
 router.get('/analytics/:policy_id', async (req, res) => {
   try {
     const { policy_id } = req.params;
+    console.log(`[Bandit Route] GET /analytics/${policy_id}`);
+    
+    if (!policy_id) {
+      return res.status(400).json({ error: 'policy_id is required' });
+    }
+
     const analytics = await bandit.getArmAnalytics(Number(policy_id));
+    console.log(`[Bandit Route] Analytics retrieved successfully for policy ${policy_id}`);
+    
     res.json({ success: true, analytics });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error(`[Bandit Route] Error getting analytics for policy ${req.params.policy_id}:`, err);
+    res.status(500).json({ 
+      error: err.message,
+      details: process.env.NODE_ENV === 'development' ? err.stack : undefined
+    });
   }
 });
 

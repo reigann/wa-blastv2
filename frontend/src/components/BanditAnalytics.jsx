@@ -27,12 +27,20 @@ const BanditAnalytics = memo(function BanditAnalytics({ policyId }) {
       setLoading(true);
       setError(null);
       try {
+        console.log(`[BanditAnalytics] Loading analytics for policyId: ${policyId}`);
         const response = await banditAPI.getAnalytics(policyId);
+        console.log('[BanditAnalytics] Response:', response.data);
+        
         if (response.data?.success) {
           setAnalytics(response.data.analytics);
+          console.log('[BanditAnalytics] Analytics set successfully:', response.data.analytics);
+        } else {
+          setError('Invalid response from server');
+          setAnalytics(null);
         }
       } catch (err) {
-          setError(err.response?.data?.error || 'Failed to load analytics');
+        console.error('[BanditAnalytics] Error loading analytics:', err);
+        setError(err.response?.data?.error || err.message || 'Failed to load analytics');
         setAnalytics(null);
       } finally {
         setLoading(false);
@@ -78,29 +86,42 @@ const BanditAnalytics = memo(function BanditAnalytics({ policyId }) {
   }
 
   const arms = Object.values(analytics).sort((a, b) => a.arm_id - b.arm_id);
-  const bestArm = arms.reduce((best, curr) => 
-    curr.avg_reward > best.avg_reward ? curr : best, arms[0]);
+  
+  // Validate arms data
+  if (arms.length === 0) {
+    return (
+      <Alert variant="danger" className="mb-4">
+        Invalid analytics data received.
+      </Alert>
+    );
+  }
+
+  const bestArm = arms.reduce((best, curr) => {
+    const currReward = Number(curr.avg_reward) || 0;
+    const bestReward = Number(best.avg_reward) || 0;
+    return currReward > bestReward ? curr : best;
+  }, arms[0]);
 
   // Data for bar chart (avg reward comparison)
   const rewardChartData = arms.map(arm => ({
-    arm: `Arm ${arm.arm_id}`,
-    avg_reward: parseFloat(arm.avg_reward.toFixed(2)),
-    total_reward: parseFloat(arm.total_reward.toFixed(2)),
-  }));
+    arm: `Arm ${Number(arm.arm_id)}`,
+    avg_reward: Number((arm.avg_reward || 0).toFixed(2)),
+    total_reward: Number((arm.total_reward || 0).toFixed(2)),
+  })).filter(item => !isNaN(item.avg_reward) && !isNaN(item.total_reward));
 
   // Data for line chart (success vs failure)
   const successChartData = arms.map(arm => ({
-    arm: `Arm ${arm.arm_id}`,
-    successful: arm.successful_count,
-    failed: arm.failed_count,
-  }));
+    arm: `Arm ${Number(arm.arm_id)}`,
+    successful: Number(arm.successful_count || 0),
+    failed: Number(arm.failed_count || 0),
+  })).filter(item => !isNaN(item.successful) && !isNaN(item.failed));
 
   // Data for engagement metrics
   const engagementChartData = arms.map(arm => ({
-    arm: `Arm ${arm.arm_id}`,
-    read: arm.read_count || 0,
-    reply: arm.reply_count || 0,
-  }));
+    arm: `Arm ${Number(arm.arm_id)}`,
+    read: Number(arm.read_count || 0),
+    reply: Number(arm.reply_count || 0),
+  })).filter(item => !isNaN(item.read) && !isNaN(item.reply));
 
   const getArmColor = (armId) => {
     const colors = ['#25D366', '#3B82F6', '#F59E0B', '#EF4444', '#8B5CF6'];
