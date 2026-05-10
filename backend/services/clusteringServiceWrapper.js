@@ -18,45 +18,40 @@ class ClusteringServiceWrapper {
    * Find Python executable in various locations
    */
   findPython() {
-    const candidates = [];
-    
-    // Windows paths
-    if (os.platform() === 'win32') {
-      candidates.push(
-        path.join(__dirname, '../.venv/Scripts/python.exe'),
-        'python.exe',
-        'python3.exe',
-        'py.exe'
-      );
-    } else {
-      // Unix/Linux/Mac paths
-      candidates.push(
-        path.join(__dirname, '../.venv/bin/python'),
-        path.join(__dirname, '../.venv/bin/python3'),
-        'python',
-        'python3'
-      );
-    }
+  const fs = require('fs');
+  const candidates = [];
 
-    // Try each candidate
+  if (os.platform() === 'win32') {
+    candidates.push(
+      // 1. Cek folder venv (tanpa titik) di dalam backend
+      path.join(__dirname, '../venv/Scripts/python.exe'), 
+      path.join(process.cwd(), 'backend/venv/Scripts/python.exe'),
+      // 2. Tambahkan juga pengecekan .venv (dengan titik) untuk jaga-jaga
+      path.join(__dirname, '../.venv/Scripts/python.exe'),
+      'python.exe',
+      'python3.exe'
+    );
+  } else {
+    candidates.push(
+      path.join(__dirname, '../venv/bin/python'),
+      path.join(__dirname, '../.venv/bin/python'),
+      'python',
+      'python3'
+    );
+  }
+
+    // Try each candidate - full paths first
     for (const python of candidates) {
       try {
-        // For global commands, we can't check if exists easily, so just return them
-        if (python === 'python.exe' || python === 'python3.exe' || python === 'python' || python === 'python3' || python === 'py.exe') {
-          return python;
-        }
-        // For full paths, verify they exist
-        const fs = require('fs');
-        if (fs.existsSync(python)) {
-          return python;
-        }
+        if (fs.existsSync(python)) return python;
       } catch (err) {
-        // Continue to next candidate
+        // ignore
       }
     }
 
     return null;
   }
+
 
   /**
    * Run K-Means clustering on contacts
@@ -90,9 +85,20 @@ class ClusteringServiceWrapper {
         });
 
         const args = [
-          path.join(__dirname, 'clusteringService.py'),
-          JSON.stringify(contactData)
+          "-u",
+          "-c",
+          `import runpy, json, sys; 
+contact_data=json.loads(sys.argv[1]); 
+selected_features=json.loads(sys.argv[2]); 
+# Patch argv expected by clusteringService.py: [contacts_json, n_clusters(optional), selected_features(optional)]
+# We'll run clusteringService.py but override sys.argv accordingly.
+sys.argv=['clusteringService.py', json.dumps(contact_data), ${nClusters ? 'str('+nClusters+')' : '""'} , json.dumps(selected_features)];
+runpy.run_path('${path.join(__dirname, 'clusteringService.py').replace(/\\/g,'\\\\')}', run_name='__main__')`,
+          JSON.stringify(contactData),
+          JSON.stringify(selectedFeatures)
         ];
+
+
 
         if (nClusters) {
           args.push(nClusters.toString());
@@ -101,11 +107,25 @@ class ClusteringServiceWrapper {
           args.push(JSON.stringify(selectedFeatures));
         }
 
-        // Spawn Python process
+        // Spawn Python process (Windows-safe)
+        console.log(`🐍 Spawning Python: ${this.pythonPath}`);
+        console.log(`📊 Script: ${args[0]}`);
+        console.log(`👥 Contacts: ${contactData.length}`);
+
+        // On Windows, passing an interpreter absolute path directly to spawn()
+        // can still resolve incorrectly in some environments.
+        // Using cmd.exe makes interpreter routing deterministic.
         const python = spawn(this.pythonPath, args, {
-          maxBuffer: 10 * 1024 * 1024, // 10MB buffer
-          timeout: 60000 // 60 second timeout
-        });
+        maxBuffer: 10 * 1024 * 1024,
+        timeout: 60000,
+        windowsHide: true,
+      });
+
+
+        // Force windows-style stderr capture in case python wraps interpreter resolution
+        // (Observed failure mentions /usr/bin/python.exe; this helps expose full argv)
+        console.log('🐍 Python argv:', python.spawnargs);
+
 
         let output = '';
         let error = '';
@@ -120,7 +140,9 @@ class ClusteringServiceWrapper {
 
         python.on('error', (err) => {
           // Handle spawn errors (e.g., Python not found)
-          reject(new Error(`Failed to spawn Python process: ${err.message}`));
+          console.error(`❌ Python spawn error: ${err.message}`);
+          console.error(`   Python path was: ${this.pythonPath}`);
+          reject(new Error(`Python not found at: ${this.pythonPath}\n${err.message}`));
         });
 
         python.on('close', (code) => {

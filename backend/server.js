@@ -84,6 +84,29 @@ try {
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 app.use('/api/auth', authRoutes);
 
+// Clustering debug endpoint - NO AUTH REQUIRED
+app.get('/api/clustering/debug', async (req, res) => {
+  try {
+    const { getFirestore } = require('./services/firebaseAdmin');
+    const clusteringService = require('./services/clusteringServiceWrapper');
+    
+    const pythonAvailable = clusteringService.pythonPath !== null;
+    const totalContacts = (await getFirestore().collection('contacts').get()).size;
+
+    return res.json({
+      pythonAvailable,
+      pythonPath: clusteringService.pythonPath || 'Not found',
+      totalContacts,
+      status: pythonAvailable ? 'OK' : 'Python not available',
+      clusteringVersion: 'v2-python-sklearn',
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error('Debug error:', error);
+    return res.status(500).json({ error: error.message });
+  }
+});
+
 if (STORAGE_PROVIDER === 'firebase') {
   app.use('/api/contacts', requireAuth, contactRoutes);
   app.use('/api/templates', requireAuth, templateRoutes);

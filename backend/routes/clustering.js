@@ -1,5 +1,6 @@
 const express = require('express');
 const { admin, getFirestore } = require('../services/firebaseAdmin');
+const clusteringService = require('../services/clusteringServiceWrapper');
 
 const router = express.Router();
 const STORAGE_PROVIDER = (process.env.STORAGE_PROVIDER || 'firebase').toLowerCase();
@@ -15,86 +16,6 @@ function toMillis(value) {
 
 function normalizePhone(raw) {
   return String(raw || '').replace(/^\+/, '').replace(/[^\d]/g, '');
-}
-
-function clampClusters(value, totalContacts) {
-  const parsed = Number(value);
-  const desired = Number.isFinite(parsed) ? Math.floor(parsed) : 3;
-  const maxAllowed = Math.min(8, totalContacts);
-  return Math.max(2, Math.min(desired, maxAllowed));
-}
-
-function toVector(contact, sentMap, selectedFeatures) {
-  const created = toMillis(contact.created_at);
-  const recencyDays = created > 0 ? Math.max(Math.floor((Date.now() - created) / 86400000), 0) : 0;
-  const frequency = Number(sentMap.get(normalizePhone(contact.phone)) || 0);
-  const groupSignal = String(contact.group_name || 'default').length;
-  const prodiSignal = String(contact.minat_prodi || 'unknown').length;
-
-  const featureMap = {
-    recency: recencyDays,
-    frequency,
-    group: groupSignal,
-    prodi: prodiSignal,
-  };
-
-  return selectedFeatures.map((key) => Number(featureMap[key] || 0));
-}
-
-function distanceSquared(a, b) {
-  let sum = 0;
-  for (let i = 0; i < a.length; i += 1) {
-    const diff = (a[i] || 0) - (b[i] || 0);
-    sum += diff * diff;
-  }
-  return sum;
-}
-
-function meanVector(vectors, fallback) {
-  if (!vectors.length) return fallback.slice();
-  const size = vectors[0].length;
-  const out = Array.from({ length: size }, () => 0);
-  vectors.forEach((v) => {
-    for (let i = 0; i < size; i += 1) out[i] += Number(v[i] || 0);
-  });
-  for (let i = 0; i < size; i += 1) out[i] /= vectors.length;
-  return out;
-}
-
-function runSimpleKMeans(vectors, k, maxIterations = 12) {
-  const centroids = vectors.slice(0, k).map((v) => v.slice());
-  const labels = Array.from({ length: vectors.length }, () => 0);
-
-  for (let iter = 0; iter < maxIterations; iter += 1) {
-    let changed = false;
-
-    for (let i = 0; i < vectors.length; i += 1) {
-      let bestIndex = 0;
-      let bestDist = Number.POSITIVE_INFINITY;
-      for (let c = 0; c < k; c += 1) {
-        const dist = distanceSquared(vectors[i], centroids[c]);
-        if (dist < bestDist) {
-          bestDist = dist;
-          bestIndex = c;
-        }
-      }
-      if (labels[i] !== bestIndex) {
-        labels[i] = bestIndex;
-        changed = true;
-      }
-    }
-
-    const groups = Array.from({ length: k }, () => []);
-    for (let i = 0; i < vectors.length; i += 1) groups[labels[i]].push(vectors[i]);
-
-    for (let c = 0; c < k; c += 1) {
-      centroids[c] = meanVector(groups[c], centroids[c]);
-    }
-
-    if (!changed) break;
-  }
-
-  return { labels, centroids };
 }
 
 async function loadContacts(groupName = null) {
@@ -118,6 +39,7 @@ async function getSentMap() {
   return map;
 }
 
+// Middleware: Only allow Firebase mode (apply to all routes below)
 router.use((req, res, next) => {
   if (STORAGE_PROVIDER !== 'firebase') {
     return res.status(503).json({
@@ -127,45 +49,80 @@ router.use((req, res, next) => {
   return next();
 });
 
+// POST /run - Run clustering using Python scikit-learn
 router.post('/run', async (req, res) => {
   try {
+    console.log('📊 Starting clustering request...');
     const { groupName = null, nClusters = null, features = [] } = req.body || {};
+    
+    // Load contacts from Firebase
+    console.log('Loading contacts...');
     const contacts = await loadContacts(groupName);
 
     if (contacts.length < 2) {
-      return res.status(400).json({ error: 'Minimal 2 kontak diperlukan untuk clustering' });
+      return res.status(400).json({ 
+        error: 'Minimal 2 kontak diperlukan untuk clustering',
+        contactsFound: contacts.length
+      });
     }
 
+    // Filter features
     const selectedFeatures = Array.isArray(features)
       ? features.filter((item) => ['recency', 'frequency', 'group', 'prodi'].includes(item))
       : [];
     const featuresUsed = selectedFeatures.length ? selectedFeatures : ['recency', 'frequency', 'group'];
 
-    const k = clampClusters(nClusters, contacts.length);
-    const sentMap = await getSentMap();
-    const vectors = contacts.map((contact) => toVector(contact, sentMap, featuresUsed));
-    const result = runSimpleKMeans(vectors, k);
+    console.log(`📊 Running Python clustering with ${contacts.length} contacts, ${nClusters || 'auto'} clusters, features: ${featuresUsed.join(',')}`);
 
-    const db = getFirestore();
-    const batch = db.batch();
+    // Run Python clustering service
+    let result;
+    try {
+      result = await clusteringService.runClustering(contacts, nClusters, featuresUsed);
+    } catch (pythonError) {
+      console.error('❌ Python clustering error:', pythonError.message);
+      return res.status(500).json({ 
+        error: `Clustering failed: ${pythonError.message}`,
+        hint: 'Make sure Python 3.8+ and scikit-learn are installed'
+      });
+    }
+
+    if (!result.success) {
+      return res.status(500).json({ error: result.error || 'Unknown clustering error' });
+    }
+
+    console.log(`✅ Clustering completed. Labels: ${result.labels.length}, K: ${result.n_clusters}`);
+
+    // Save to Firebase
+    const firebaseDb = getFirestore();
+    const batch = firebaseDb.batch();
+    
     contacts.forEach((contact, index) => {
-      const ref = db.collection('contacts').doc(String(contact.id));
-      batch.set(ref, { cluster_id: result.labels[index], updated_at: admin.firestore.Timestamp.now() }, { merge: true });
+      const ref = firebaseDb.collection('contacts').doc(String(contact.id));
+      batch.set(ref, {
+        cluster_id: result.labels[index] || 0,
+        updated_at: admin.firestore.Timestamp.now(),
+      }, { merge: true });
     });
+
+    console.log('💾 Saving to Firebase...');
     await batch.commit();
 
+    // Save metadata to Firebase
     const now = admin.firestore.Timestamp.now();
-    const metadataRef = await db.collection('cluster_metadata').add({
+    const metadataRef = await firebaseDb.collection('cluster_metadata').add({
       name: `Clustering_${groupName || 'all'}_${new Date().toISOString().slice(0, 10)}`,
       total_contacts: contacts.length,
-      num_clusters: k,
-      silhouette_score: 0,
-      davies_bouldin_index: 0,
-      features_used: featuresUsed,
+      num_clusters: result.n_clusters,
+      silhouette_score: result.silhouette_score || 0,
+      davies_bouldin_index: result.davies_bouldin_index || 0,
+      features_used: result.features_used || featuresUsed,
       created_at: now,
       updated_at: now,
     });
 
+    console.log(`✅ Saved cluster metadata with ID: ${metadataRef.id}`);
+
+    // Calculate cluster statistics
     const clusterCounter = new Map();
     result.labels.forEach((label) => {
       clusterCounter.set(label, (clusterCounter.get(label) || 0) + 1);
@@ -182,19 +139,22 @@ router.post('/run', async (req, res) => {
     return res.json({
       success: true,
       clusterId: metadataRef.id,
-      message: `Clustering berhasil disimpan dengan ${k} cluster`,
+      message: `Clustering berhasil disimpan dengan ${result.n_clusters} cluster`,
       metrics: {
-        silhouette_score: 0,
-        davies_bouldin_index: 0,
-        n_clusters: k,
+        silhouette_score: result.silhouette_score || 0,
+        davies_bouldin_index: result.davies_bouldin_index || 0,
+        n_clusters: result.n_clusters,
         total_contacts: contacts.length,
         cluster_stats: clusterStats,
-        features_used: featuresUsed,
+        features_used: result.features_used || featuresUsed,
       },
     });
   } catch (error) {
-    console.error('Clustering run error:', error);
-    return res.status(500).json({ error: error.message });
+    console.error('❌ Clustering run error:', error);
+    return res.status(500).json({ 
+      error: error.message,
+      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
   }
 });
 
@@ -386,25 +346,6 @@ router.get('/stats', async (req, res) => {
       }));
 
     return res.json({ stats });
-  } catch (error) {
-    return res.status(500).json({ error: error.message });
-  }
-});
-
-router.get('/debug', async (req, res) => {
-  try {
-    const db = getFirestore();
-    const contactsCount = (await db.collection('contacts').get()).size;
-    const metadataCount = (await db.collection('cluster_metadata').get()).size;
-
-    return res.json({
-      pythonAvailable: false,
-      pythonPath: 'not_required_in_firebase_mode',
-      totalContacts: contactsCount,
-      clusteringMetadataRecords: metadataCount,
-      storage: STORAGE_PROVIDER,
-      status: 'OK',
-    });
   } catch (error) {
     return res.status(500).json({ error: error.message });
   }

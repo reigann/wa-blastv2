@@ -72,10 +72,9 @@ export default function Clustering() {
     try {
       const response = await clusteringAPI.latest();
       const payload = response.data || {};
-      setLatestMeta(payload.latest || null);
-      setClusterSummary(payload.clusters || []);
-      setContacts(payload.contacts || []);
-      setUsedFeatures(payload.features_used || []);
+      setLatestMeta(payload.latest || null);     // Metadata (silhouette, dll)
+      setClusterSummary(payload.clusters || []); // RINGKASAN PER CLUSTER (Avg Recency, dll)
+      setContacts(payload.contacts || []);       // TITIK DATA UNTUK GRAFIK
 
       if (payload.latest?.num_clusters) {
         setKValue(payload.latest.num_clusters);
@@ -281,12 +280,7 @@ export default function Clustering() {
                         }}
                       />
                       {clusterSummary.map((cluster, index) => (
-                        <Scatter
-                          key={cluster.id}
-                          name={`Cluster ${cluster.id}`}
-                          data={scatterDataByCluster.get(Number(cluster.id)) || []}
-                          fill={clusterColors[index % clusterColors.length]}
-                        />
+                        <Scatter key={cluster.id} name={`Cluster ${cluster.id}`} data={scatterDataByCluster.get(Number(cluster.id))} fill={clusterColors[index % clusterColors.length]} />
                       ))}
                     </ScatterChart>
                   </ResponsiveContainer>
