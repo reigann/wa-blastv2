@@ -15,51 +15,60 @@ export function useSocket() {
     const token = getAuthToken();
     if (!token) return undefined;
 
-    socketRef.current = io(BACKEND_URL, {
+    let cancelled = false;
+    const socket = io(BACKEND_URL, {
       auth: { token },
       transports: ['websocket'],
+      autoConnect: false,
     });
+    socketRef.current = socket;
 
-    socketRef.current.on('wa:status', (status) => {
+    // Delay connect slightly to avoid React StrictMode dev mount/unmount race noise.
+    const connectTimer = setTimeout(() => {
+      if (!cancelled) socket.connect();
+    }, 0);
+
+    socket.on('wa:status', (status) => {
       setWaStatus(status);
       if (status === 'connected') setQrCode(null);
       if (status !== 'connected') setWaPhone(null);
     });
 
-    socketRef.current.on('wa:qr', (qr) => {
+    socket.on('wa:qr', (qr) => {
       setQrCode(qr);
       setWaStatus('qr');
     });
 
-    socketRef.current.on('wa:ready', (data) => {
+    socket.on('wa:ready', (data) => {
       // data can include phone
       if (data && data.phone) setWaPhone(data.phone);
       setWaStatus('connected');
       setQrCode(null);
     });
 
-    socketRef.current.on('blast:started', (data) => {
+    socket.on('blast:started', (data) => {
       setBlastStatus('started');
       setBlastProgress({ current: 0, total: data.total, sent: 0, failed: 0 });
     });
 
-    socketRef.current.on('blast:progress', (data) => {
+    socket.on('blast:progress', (data) => {
       setBlastProgress(data);
     });
 
-    socketRef.current.on('blast:completed', (data) => {
+    socket.on('blast:completed', (data) => {
       setBlastStatus('completed');
       setBlastProgress(prev => ({ ...prev, ...data }));
     });
 
-    socketRef.current.on('blast:cancelled', () => {
+    socket.on('blast:cancelled', () => {
       setBlastStatus('cancelled');
     });
 
     return () => {
-      if (socketRef.current) {
-        socketRef.current.disconnect();
-      }
+      cancelled = true;
+      clearTimeout(connectTimer);
+      socket.removeAllListeners();
+      if (socket.connected) socket.disconnect();
     };
   }, []);
 

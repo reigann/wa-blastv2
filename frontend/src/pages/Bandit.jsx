@@ -1,7 +1,7 @@
 import { Container, Alert, Spinner } from 'react-bootstrap';
 import { useState, useEffect } from 'react';
 import PageHeader from '../components/PageHeader';
-import BanditAnalytics from '../components/BanditAnalytics';
+import BanditStatsEnhanced from '../components/BanditStatsEnhanced';
 import { banditAPI } from '../services/api';
 
 export default function BanditPage() {
@@ -53,28 +53,32 @@ export default function BanditPage() {
       )}
 
       <div className="mb-4">
-        <label className="form-label fw-bold">Select Bandit Policy:</label>
-        <select 
-          className="form-select"
-          value={selectedPolicy || ''}
-          onChange={(e) => setSelectedPolicy(Number(e.target.value))}
-          disabled={policies.length === 0}
-        >
-          <option value="">-- Choose a policy --</option>
-          {policies.map(policy => (
-            <option key={policy.id} value={policy.id}>
-              {policy.name} (Arms: {policy.arms})
-            </option>
-          ))}
-        </select>
-        {policies.length === 0 && (
-          <Alert variant="info" className="mt-2 mb-0">
-            No policies found. Create a policy to see analytics.
-          </Alert>
-        )}
+        <div className="row">
+          <div className="col-md-12">
+            <label className="form-label fw-bold">Select Bandit Policy:</label>
+            <select
+              className="form-select"
+              value={selectedPolicy || ''}
+              onChange={(e) => setSelectedPolicy(Number(e.target.value))}
+              disabled={policies.length === 0}
+            >
+              <option value="">-- Choose a policy --</option>
+              {policies.map((policy) => (
+                <option key={policy.id} value={policy.id}>
+                  {policy.name} (Arms: {policy.arms})
+                </option>
+              ))}
+            </select>
+            {policies.length === 0 && (
+              <Alert variant="info" className="mt-2 mb-0">
+                No policies found. Create a policy to see analytics.
+              </Alert>
+            )}
+          </div>
+        </div>
       </div>
 
-      <BanditAnalytics policyId={selectedPolicy} />
+      <BanditStatsEnhanced policyId={selectedPolicy} />
     </Container>
   );
 }

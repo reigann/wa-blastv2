@@ -12,7 +12,7 @@ import {
 import PageHeader from '../components/PageHeader';
 import StatusBadge from '../components/StatusBadge';
 import BanditPolicySelector from '../components/BanditPolicySelector';
-import { blastAPI, contactsAPI, templatesAPI } from '../services/api';
+import { banditAPI, blastAPI, contactsAPI, templatesAPI } from '../services/api';
 import { BACKEND_URL } from '../lib/config';
 
 const steps = [
@@ -42,6 +42,7 @@ export default function Blast() {
   const [selectedContactIds, setSelectedContactIds] = useState([]);
   const [selectedTemplate, setSelectedTemplate] = useState(null);
   const [selectedBanditPolicy, setSelectedBanditPolicy] = useState(null);
+  const [templateRecommendation, setTemplateRecommendation] = useState(null);
   const [search, setSearch] = useState('');
   const [filterGroup, setFilterGroup] = useState('all');
   const [delay, setDelay] = useState(3000);
@@ -55,6 +56,27 @@ export default function Blast() {
   useEffect(() => {
     loadData();
   }, []);
+
+  useEffect(() => {
+    async function loadTemplateRecommendation() {
+      if (!templates.length) {
+        setTemplateRecommendation(null);
+        return;
+      }
+      try {
+        const ids = templates.map((t) => t.id);
+        const response = await banditAPI.recommendTemplate(ids, selectedBanditPolicy?.id || null);
+        if (response.data?.success) {
+          setTemplateRecommendation(response.data.recommendation || null);
+        } else {
+          setTemplateRecommendation(null);
+        }
+      } catch {
+        setTemplateRecommendation(null);
+      }
+    }
+    loadTemplateRecommendation();
+  }, [templates, selectedBanditPolicy]);
 
   async function loadData() {
     try {
@@ -143,6 +165,7 @@ export default function Blast() {
       await blastAPI.start({
         name: sessionName,
         message: selectedTemplate.content,
+        template_id: selectedTemplate.id,
         template_media_path: selectedTemplate.media_path || undefined,
         link: selectedTemplate.link || undefined,
         delay_min: Number(delay),
@@ -286,6 +309,31 @@ export default function Blast() {
               {currentStep === 2 ? (
                 <>
                   <h3 className="mb-3">Choose Template</h3>
+                  {templateRecommendation?.recommended_template_id && (
+                    <Card className="mb-3 border-success">
+                      <Card.Body className="py-2 d-flex justify-content-between align-items-center">
+                        <div>
+                          <div className="fw-semibold text-success mb-1">Bandit Template Recommendation</div>
+                          <div className="small text-secondary">
+                            Berdasarkan performa read/reply historis, template terbaik saat ini:
+                            <strong className="ms-1">
+                              {templates.find((t) => String(t.id) === String(templateRecommendation.recommended_template_id))?.name || `Template #${templateRecommendation.recommended_template_id}`}
+                            </strong>
+                          </div>
+                        </div>
+                        <Button
+                          variant="outline-success"
+                          size="sm"
+                          onClick={() => {
+                            const rec = templates.find((t) => String(t.id) === String(templateRecommendation.recommended_template_id));
+                            if (rec) setSelectedTemplate(rec);
+                          }}
+                        >
+                          Use Recommendation
+                        </Button>
+                      </Card.Body>
+                    </Card>
+                  )}
                   <Row className="g-3">
                     {templates.map((template) => {
                       const isSelected = selectedTemplate?.id === template.id;

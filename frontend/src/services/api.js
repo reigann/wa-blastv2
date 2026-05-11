@@ -86,6 +86,20 @@ export const banditAPI = {
   getDebug: (policyId) => api.get(`/bandit/debug/${policyId}`),
   simulateRead: (data) => api.post('/bandit/test/simulate-read', data),
   simulateReply: (data) => api.post('/bandit/test/simulate-reply', data),
+  
+  // NEW STATISTICS ENDPOINTS
+  getPolicyStats: (policyId, params = {}) => api.get(`/bandit/stats/policy/${policyId}`, { params }),
+  getSessionStats: (sessionId) => api.get(`/bandit/stats/session/${sessionId}`),
+  getRecentEvents: (policyId, limit = 100, params = {}) => api.get(`/bandit/stats/events/${policyId}`, { params: { limit, ...params } }),
+  getEventBreakdown: (policyId, params = {}) => api.get(`/bandit/stats/breakdown/${policyId}`, { params }),
+  comparePolicies: (policyIds) => api.post('/bandit/stats/compare', { policy_ids: policyIds }),
+  getLearningProgress: (policyId, params = {}) => api.get(`/bandit/stats/learning-progress/${policyId}`, { params }),
+  recommendTemplate: (templateIds, policyId = null, startDate = null, endDate = null) => api.post('/bandit/stats/recommend-template', {
+    template_ids: templateIds,
+    policy_id: policyId,
+    start_date: startDate,
+    end_date: endDate,
+  }),
 };
 
 export const clusteringAPI = {

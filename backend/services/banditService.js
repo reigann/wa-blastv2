@@ -11,14 +11,17 @@ function ensureFirebaseMode() {
 }
 
 function normalizePhone(phone) {
-  if (!phone) return '';
-  return String(phone)
+  const digits = String(phone || '')
     .replace(/@c\.us$/i, '')
     .replace(/@g\.us$/i, '')
     .replace(/@lid$/i, '')
     .replace(/@.*$/i, '')
-    .replace(/^\+/, '')
     .replace(/[^\d]/g, '');
+
+  if (!digits) return '';
+  if (digits.startsWith('0')) return `62${digits.slice(1)}`;
+  if (!digits.startsWith('62')) return `62${digits}`;
+  return digits;
 }
 
 function zeros(n) {
@@ -318,17 +321,20 @@ async function updateEventDeliveryStatus(eventId, deliveryStatus, readStatus = 0
   if (!doc.exists) throw new Error('Event not found');
 
   const current = doc.data() || {};
+  const mergedReadStatus = Math.max(Number(current.read_status) || 0, Number(readStatus) || 0);
+  const mergedReplyReceived = Math.max(Number(current.reply_received) || 0, Number(replyReceived) || 0);
   const autoReward = getAutoReward(deliveryStatus, readStatus, replyReceived);
 
   if (current.reward === null || current.reward === undefined) {
-    await feedback(eventId, autoReward);
+    const mergedReward = getAutoReward(deliveryStatus, mergedReadStatus, mergedReplyReceived);
+    await feedback(eventId, mergedReward);
   }
 
   await ref.set(
     {
       delivery_status: deliveryStatus,
-      read_status: Number(readStatus) || 0,
-      reply_received: Number(replyReceived) || 0,
+      read_status: mergedReadStatus,
+      reply_received: mergedReplyReceived,
       auto_reward_applied: 1,
       updated_at: admin.firestore.Timestamp.now(),
     },
@@ -406,6 +412,81 @@ async function getArmDefinitions(policyId) {
   return Array.isArray(policy.arm_definitions) ? policy.arm_definitions : [];
 }
 
+async function findRecentEventsByPhone(phone, options = {}) {
+  ensureFirebaseMode();
+
+  const normalizedPhone = normalizePhone(phone);
+  if (!normalizedPhone) return [];
+
+  const hours = Number(options.hours) > 0 ? Number(options.hours) : 48;
+  const maxScan = Math.max(20, Math.min(Number(options.maxScan) || 200, 1000));
+  const limit = Math.max(1, Math.min(Number(options.limit) || 20, maxScan));
+  const onlyPendingReward = Boolean(options.onlyPendingReward);
+  const cutoff = Date.now() - (hours * 60 * 60 * 1000);
+
+  const snap = await getFirestore()
+    .collection('bandit_events')
+    .where('phone', '==', normalizedPhone)
+    .limit(maxScan)
+    .get();
+
+  return snap.docs
+    .map((doc) => ({ id: Number(doc.id), ...doc.data() }))
+    .filter((event) => {
+      const createdAtMillis = event.created_at?.toMillis ? event.created_at.toMillis() : 0;
+      if (createdAtMillis < cutoff) return false;
+      if (!onlyPendingReward) return true;
+      return event.reward === null || event.reward === undefined;
+    })
+    .sort((a, b) => {
+      const ta = a.created_at?.toMillis ? a.created_at.toMillis() : 0;
+      const tb = b.created_at?.toMillis ? b.created_at.toMillis() : 0;
+      return tb - ta;
+    })
+    .slice(0, limit);
+}
+
+async function attachWhatsAppMetadata(eventId, metadata = {}) {
+  ensureFirebaseMode();
+  const ref = getFirestore().collection('bandit_events').doc(String(eventId));
+  const aliases = Array.isArray(metadata.wa_aliases) ? metadata.wa_aliases.filter(Boolean) : [];
+  await ref.set(
+    {
+      wa_message_id: metadata.wa_message_id || null,
+      wa_aliases: aliases,
+      updated_at: admin.firestore.Timestamp.now(),
+    },
+    { merge: true }
+  );
+}
+
+async function findRecentEventsByWaAlias(alias, options = {}) {
+  ensureFirebaseMode();
+  const normalizedAlias = String(alias || '').replace(/[^\d]/g, '');
+  if (!normalizedAlias) return [];
+  const hours = Number(options.hours) > 0 ? Number(options.hours) : 48;
+  const limit = Math.max(1, Math.min(Number(options.limit) || 20, 200));
+  const cutoff = Date.now() - (hours * 60 * 60 * 1000);
+
+  const snap = await getFirestore()
+    .collection('bandit_events')
+    .where('wa_aliases', 'array-contains', normalizedAlias)
+    .limit(limit)
+    .get();
+
+  return snap.docs
+    .map((doc) => ({ id: Number(doc.id), ...doc.data() }))
+    .filter((event) => {
+      const createdAtMillis = event.created_at?.toMillis ? event.created_at.toMillis() : 0;
+      return createdAtMillis >= cutoff;
+    })
+    .sort((a, b) => {
+      const ta = a.created_at?.toMillis ? a.created_at.toMillis() : 0;
+      const tb = b.created_at?.toMillis ? b.created_at.toMillis() : 0;
+      return tb - ta;
+    });
+}
+
 module.exports = {
   createPolicy,
   recommend,
@@ -418,4 +499,7 @@ module.exports = {
   getArmAnalytics,
   defineArms,
   getArmDefinitions,
+  findRecentEventsByPhone,
+  attachWhatsAppMetadata,
+  findRecentEventsByWaAlias,
 };

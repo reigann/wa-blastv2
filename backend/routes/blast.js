@@ -49,15 +49,48 @@ router.get('/sessions', async (req, res) => {
       const firestore = getFirestore();
       const snap = await firestore.collection('blast_sessions').get();
       const sessions = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-      sessions.sort((a, b) => {
+
+      // Enrich each session with bandit read/reply stats
+      const enriched = await Promise.all(
+        sessions.map(async (session) => {
+          const banditSnap = await firestore
+            .collection('bandit_events')
+            .where('session_id', '==', String(session.id))
+            .get();
+
+          let read = 0;
+          let replied = 0;
+          banditSnap.docs.forEach((doc) => {
+            const ev = doc.data() || {};
+            if (Number(ev.read_status) === 1) read += 1;
+            if (Number(ev.reply_received) === 1) replied += 1;
+          });
+
+          return {
+            ...session,
+            read,
+            replied,
+          };
+        })
+      );
+      enriched.sort((a, b) => {
         const ta = a.created_at?.toMillis ? a.created_at.toMillis() : 0;
         const tb = b.created_at?.toMillis ? b.created_at.toMillis() : 0;
         return tb - ta;
       });
-      return res.json(sessions);
+      return res.json(enriched);
     }
 
-    const sessions = await db.all('SELECT * FROM blast_sessions ORDER BY created_at DESC');
+    const sessions = await db.all(`
+      SELECT
+        s.*,
+        COALESCE(SUM(CASE WHEN CAST(be.read_status AS INTEGER)=1 THEN 1 ELSE 0 END), 0) AS read,
+        COALESCE(SUM(CASE WHEN CAST(be.reply_received AS INTEGER)=1 THEN 1 ELSE 0 END), 0) AS replied
+      FROM blast_sessions s
+      LEFT JOIN bandit_events be ON CAST(be.session_id AS TEXT) = CAST(s.id AS TEXT)
+      GROUP BY s.id
+      ORDER BY s.created_at DESC
+    `);
     return res.json(sessions);
   } catch (err) {
     return res.status(500).json({ error: err.message });
@@ -87,7 +120,7 @@ router.get('/sessions/:id/logs', async (req, res) => {
 
 router.post('/start', upload.single('media'), async (req, res) => {
   const username = req.auth?.email || 'default';
-  const { name, message, contact_ids, group_name, delay_min, delay_max, template_media_path, policy_id, schedule_at, link } = req.body;
+  const { name, message, contact_ids, group_name, delay_min, delay_max, template_media_path, policy_id, template_id, schedule_at, link } = req.body;
 
   let scheduledAt = null;
   if (schedule_at) {
@@ -121,6 +154,8 @@ router.post('/start', upload.single('media'), async (req, res) => {
       const ref = await firestore.collection('blast_sessions').add({
         name: sessionName,
         message,
+        template_id: template_id ? String(template_id) : null,
+        bandit_policy_id: policy_id ? Number(policy_id) : null,
         total: contacts.length,
         sent: 0,
         failed: 0,

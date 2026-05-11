@@ -173,6 +173,8 @@ export default function Sessions() {
             const sent = session.sent || 0;
             const total = session.total || 0;
             const failed = session.failed || 0;
+            const read = session.read || 0;
+            const replied = session.replied || 0;
             const progress = total > 0 ? Math.round((sent / total) * 100) : 0;
             const status = normalizeStatus(session);
             const running = session.status === 'running';
@@ -203,6 +205,11 @@ export default function Sessions() {
                       <span>Sent <strong>{sent}</strong></span>
                       <span>Total <strong>{total}</strong></span>
                       <span className="text-danger">Failed <strong>{failed}</strong></span>
+                    </div>
+
+                    <div className="d-flex justify-content-between mb-3 small">
+                      <span className="text-info">Read <strong>{read}</strong></span>
+                      <span className="text-warning">Reply <strong>{replied}</strong></span>
                     </div>
 
                     <div className="small text-secondary mb-3">

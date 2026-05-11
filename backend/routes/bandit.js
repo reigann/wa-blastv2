@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const bandit = require('../services/banditService');
+const stats = require('../services/banditStatsAggregator');
 const STORAGE_PROVIDER = (process.env.STORAGE_PROVIDER || 'firebase').toLowerCase();
 
 router.use((req, res, next) => {
@@ -223,6 +224,111 @@ router.post('/test/simulate-reply', async (req, res) => {
     });
   } catch (err) {
     console.error('Test simulate-reply error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================
+// STATISTICS & ANALYTICS ENDPOINTS (NEW)
+// ============================================
+
+// GET /api/bandit/stats/policy/:policy_id
+// Get comprehensive analytics for a policy
+router.get('/stats/policy/:policy_id', async (req, res) => {
+  try {
+    const { policy_id } = req.params;
+    const { start_date, end_date } = req.query;
+    const analytics = await stats.getPolicyAnalytics(Number(policy_id), { startDate: start_date, endDate: end_date });
+    res.json({ success: true, analytics });
+  } catch (err) {
+    console.error('Get policy analytics error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/bandit/stats/session/:session_id
+// Get statistics for a specific blast session
+router.get('/stats/session/:session_id', async (req, res) => {
+  try {
+    const { session_id } = req.params;
+    const sessionStats = await stats.getSessionStatistics(session_id);
+    res.json({ success: true, stats: sessionStats });
+  } catch (err) {
+    console.error('Get session stats error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/bandit/stats/events/:policy_id
+// Get recent events with full details
+router.get('/stats/events/:policy_id', async (req, res) => {
+  try {
+    const { policy_id } = req.params;
+    const { limit = 100, start_date, end_date } = req.query;
+    const events = await stats.getRecentEvents(Number(policy_id), Number(limit), { startDate: start_date, endDate: end_date });
+    res.json({ success: true, total: events.length, events });
+  } catch (err) {
+    console.error('Get recent events error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/bandit/stats/breakdown/:policy_id
+// Get breakdown of events by status
+router.get('/stats/breakdown/:policy_id', async (req, res) => {
+  try {
+    const { policy_id } = req.params;
+    const { start_date, end_date } = req.query;
+    const breakdown = await stats.getEventBreakdown(Number(policy_id), { startDate: start_date, endDate: end_date });
+    res.json({ success: true, breakdown });
+  } catch (err) {
+    console.error('Get event breakdown error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/bandit/stats/compare
+// Compare multiple policies
+router.post('/stats/compare', async (req, res) => {
+  try {
+    const { policy_ids = [] } = req.body;
+    if (!Array.isArray(policy_ids) || policy_ids.length === 0) {
+      return res.status(400).json({ error: 'policy_ids must be non-empty array' });
+    }
+    const comparison = await stats.comparePolicies(policy_ids);
+    res.json({ success: true, comparison });
+  } catch (err) {
+    console.error('Compare policies error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/bandit/stats/learning-progress/:policy_id
+// Get learning progress over time
+router.get('/stats/learning-progress/:policy_id', async (req, res) => {
+  try {
+    const { policy_id } = req.params;
+    const { start_date, end_date } = req.query;
+    const progress = await stats.getLearningProgress(Number(policy_id), { startDate: start_date, endDate: end_date });
+    res.json({ success: true, progress });
+  } catch (err) {
+    console.error('Get learning progress error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/bandit/stats/recommend-template
+// Recommend template using historical read/reply performance
+router.post('/stats/recommend-template', async (req, res) => {
+  try {
+    const { template_ids = [], policy_id = null, start_date = null, end_date = null } = req.body || {};
+    if (!Array.isArray(template_ids) || template_ids.length === 0) {
+      return res.status(400).json({ error: 'template_ids must be non-empty array' });
+    }
+    const recommendation = await stats.getTemplateRecommendation(template_ids, policy_id, { startDate: start_date, endDate: end_date });
+    res.json({ success: true, recommendation });
+  } catch (err) {
+    console.error('Recommend template error:', err);
     res.status(500).json({ error: err.message });
   }
 });

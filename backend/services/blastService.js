@@ -1,6 +1,6 @@
 const db = require('../db/database');
 const fs = require('fs');
-const { roomForUser, sendMessage, sendMessageWithMedia, normalizePhone } = require('./whatsappService');
+const { roomForUser, sendMessage, sendMessageWithMedia, normalizePhone, registerSentBanditEvent } = require('./whatsappService');
 const banditService = require('./banditService');
 const { admin, getFirestore } = require('./firebaseAdmin');
 const STORAGE_PROVIDER = (process.env.STORAGE_PROVIDER || 'firebase').toLowerCase();
@@ -185,11 +185,12 @@ async function startBlast(sessionId, contacts, message, delayMin, delayMax, medi
     // Retry logic for timeout/unstable connection
     while (retries <= MAX_RETRIES && !messageSent) {
       try {
+        let waMessage = null;
         // Send message with timeout protection
         if (mediaPath) {
-          await sendWithTimeout(() => sendMessageWithMedia(contact.phone, personalizedMessage, mediaPath, username));
+          waMessage = await sendWithTimeout(() => sendMessageWithMedia(contact.phone, personalizedMessage, mediaPath, username));
         } else {
-          await sendWithTimeout(() => sendMessage(contact.phone, personalizedMessage, username));
+          waMessage = await sendWithTimeout(() => sendMessage(contact.phone, personalizedMessage, username));
         }
         
         sent++;
@@ -206,6 +207,19 @@ async function startBlast(sessionId, contacts, message, delayMin, delayMax, medi
 
         // Auto-apply reward for bandit: message was successfully sent
         if (banditEventId) {
+          try {
+            registerSentBanditEvent(waMessage, banditEventId, contact.phone);
+            const waAliases = [
+              String(waMessage?.to || '').replace(/[^\d]/g, ''),
+              String(waMessage?.id?.remote || '').replace(/[^\d]/g, ''),
+            ].filter(Boolean);
+            await banditService.attachWhatsAppMetadata(banditEventId, {
+              wa_message_id: waMessage?.id?._serialized || waMessage?.id?.id || null,
+              wa_aliases: waAliases,
+            });
+          } catch (mapErr) {
+            console.warn('Failed to register sent message mapping:', mapErr?.message);
+          }
           try {
             // Try to auto-reward with 'sent' status (0.5 base reward + bonuses if applicable)
             await banditService.updateEventDeliveryStatus(banditEventId, 'sent', 0, 0);
@@ -334,7 +348,7 @@ async function startBlast(sessionId, contacts, message, delayMin, delayMax, medi
       const startedTime = new Date().toISOString();
       db.prepare(`UPDATE blast_sessions SET status='running', started_at=? WHERE id=?`).run(startedTime, nextRow.session_id);
       // Start next blast asynchronously
-      startBlast(nextRow.session_id, nextContacts, db.prepare('SELECT message FROM blast_sessions WHERE id=?').get(nextRow.session_id).message, payload.delay_min, payload.delay_max, payload.mediaPath || null, payload.username || 'default', payload.bandit_policy_id, payload.link || null).catch(console.error);
+      startBlast(nextRow.session_id, nextContacts, db.prepare('SELECT message FROM blast_sessions WHERE id=?').get(nextRow.session_id).message, payload.delay_min, payload.delay_max, payload.mediaPath || null, payload.username || 'default', payload.policy_id, payload.link || null).catch(console.error);
     }
   } catch (err) {
     console.error('Failed to process blast queue:', err);
@@ -442,7 +456,7 @@ function scheduleSession(sessionId, payload, scheduledAt) {
       await db.run(`UPDATE blast_sessions SET status='running', started_at=? WHERE id=?`, [scheduledStartTime, sessionId]);
 
       // start blast async
-      startBlast(sessionId, contacts, message, payloadObj.delay_min, payloadObj.delay_max, payloadObj.mediaPath || null, payloadObj.username || 'default', payloadObj.bandit_policy_id, payloadObj.link || null).catch(console.error);
+      startBlast(sessionId, contacts, message, payloadObj.delay_min, payloadObj.delay_max, payloadObj.mediaPath || null, payloadObj.username || 'default', payloadObj.policy_id, payloadObj.link || null).catch(console.error);
     } catch (err) {
       console.error('Error executing scheduled session:', err?.message || err);
     }

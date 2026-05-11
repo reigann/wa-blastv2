@@ -80,6 +80,7 @@ export default function Dashboard() {
   const [sessions, setSessions] = useState([]);
   const [policies, setPolicies] = useState([]);
   const [selectedPolicy, setSelectedPolicy] = useState(null);
+  const [banditBreakdown, setBanditBreakdown] = useState(null);
 
   useEffect(() => {
     let mounted = true;
@@ -109,12 +110,14 @@ export default function Dashboard() {
         } else {
           setPolicies([]);
           setSelectedPolicy(null);
+          setBanditBreakdown(null);
         }
       } catch (error) {
         if (mounted) {
           setContactsTotal(0);
           setSessions([]);
           setPolicies([]);
+          setBanditBreakdown(null);
         }
       } finally {
         if (mounted) {
@@ -128,6 +131,31 @@ export default function Dashboard() {
       mounted = false;
     };
   }, []);
+
+  useEffect(() => {
+    let mounted = true;
+    async function loadBanditBreakdown() {
+      if (!banditEnabled || !selectedPolicy) {
+        if (mounted) setBanditBreakdown(null);
+        return;
+      }
+      try {
+        const response = await banditAPI.getEventBreakdown(selectedPolicy);
+        if (!mounted) return;
+        if (response.data?.success) {
+          setBanditBreakdown(response.data.breakdown || null);
+        } else {
+          setBanditBreakdown(null);
+        }
+      } catch {
+        if (mounted) setBanditBreakdown(null);
+      }
+    }
+    loadBanditBreakdown();
+    return () => {
+      mounted = false;
+    };
+  }, [banditEnabled, selectedPolicy]);
 
   const summary = useMemo(() => {
     const sent = sessions.reduce((acc, s) => acc + (s.sent || 0), 0);
@@ -168,16 +196,34 @@ export default function Dashboard() {
   }, [sessions]);
 
   const donutData = useMemo(() => {
+    if (banditBreakdown?.breakdown) {
+      const byDelivery = banditBreakdown.breakdown.by_delivery_status || {};
+      const byRead = banditBreakdown.breakdown.by_read_status || {};
+      const byReply = banditBreakdown.breakdown.by_reply_status || {};
+      const failed = Number(byDelivery.failed || 0);
+      const deliveredBase = Number(byDelivery.delivered || 0) + Number(byDelivery.sent || 0);
+      const read = Number(byRead.read || 0);
+      const replied = Number(byReply.replied || 0);
+      const deliveredOnly = Math.max(deliveredBase - read, 0);
+
+      return [
+        { name: 'Delivered', value: deliveredOnly, color: '#25D366' },
+        { name: 'Read', value: read, color: '#128C7E' },
+        { name: 'Replied', value: replied, color: '#f59e0b' },
+        { name: 'Failed', value: failed, color: '#dc3545' },
+      ];
+    }
+
     const sent = summary.sent;
     const read = Math.round(sent * 0.62);
     const delivered = Math.max(sent - read, 0);
-
     return [
       { name: 'Delivered', value: delivered, color: '#25D366' },
       { name: 'Read', value: read, color: '#128C7E' },
+      { name: 'Replied', value: 0, color: '#f59e0b' },
       { name: 'Failed', value: summary.failed, color: '#dc3545' },
     ];
-  }, [summary]);
+  }, [summary, banditBreakdown]);
 
   const columns = [
     { key: 'campaign', label: 'Campaign' },

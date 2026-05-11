@@ -6,6 +6,103 @@ const banditService = require('./banditService');
 let io = null;
 
 const userStates = new Map();
+const messageBanditMap = new Map(); // messageId -> { eventId, phone, createdAt }
+const jidAliasToPhoneMap = new Map(); // normalized jid alias -> normalized phone
+const jidAliasToEventMap = new Map(); // normalized jid alias -> { eventId, createdAt }
+
+function cleanupTrackingMaps() {
+  const now = Date.now();
+  const ttlMs = 72 * 60 * 60 * 1000; // 72h
+
+  for (const [key, value] of messageBanditMap.entries()) {
+    if (!value?.createdAt || (now - value.createdAt) > ttlMs) messageBanditMap.delete(key);
+  }
+  for (const [key, value] of jidAliasToPhoneMap.entries()) {
+    if (!value?.createdAt || (now - value.createdAt) > ttlMs) jidAliasToPhoneMap.delete(key);
+  }
+  for (const [key, value] of jidAliasToEventMap.entries()) {
+    if (!value?.createdAt || (now - value.createdAt) > ttlMs) jidAliasToEventMap.delete(key);
+  }
+}
+
+function normalizePhoneDigits(phone) {
+  const digits = String(phone || '').replace(/[^\d]/g, '');
+  if (!digits) return '';
+  if (digits.startsWith('0')) return `62${digits.slice(1)}`;
+  if (!digits.startsWith('62')) return `62${digits}`;
+  return digits;
+}
+
+function normalizeRawDigits(value) {
+  return String(value || '').replace(/[^\d]/g, '');
+}
+
+function normalizeJidAlias(value) {
+  return String(value || '')
+    .replace(/@c\.us$/i, '')
+    .replace(/@g\.us$/i, '')
+    .replace(/@lid$/i, '')
+    .replace(/@.*$/i, '')
+    .replace(/[^\d]/g, '');
+}
+
+function registerJidAlias(alias, phone) {
+  const aliasKey = normalizeJidAlias(alias);
+  const phoneDigits = normalizePhoneDigits(phone);
+  if (!aliasKey || !phoneDigits) return;
+  jidAliasToPhoneMap.set(aliasKey, { phone: phoneDigits, createdAt: Date.now() });
+}
+
+function registerJidEventAlias(alias, eventId) {
+  const aliasKey = normalizeJidAlias(alias);
+  if (!aliasKey || !eventId) return;
+  jidAliasToEventMap.set(aliasKey, { eventId: Number(eventId), createdAt: Date.now() });
+}
+
+function mapIncomingToKnownPhone(value) {
+  const aliasKey = normalizeJidAlias(value);
+  if (!aliasKey) return '';
+  const hit = jidAliasToPhoneMap.get(aliasKey);
+  if (hit?.phone) return hit.phone;
+
+  // If incoming is a lid alias and not mapped yet, don't treat it as a phone number.
+  if (String(value || '').includes('@lid')) return '';
+  return normalizePhoneDigits(value);
+}
+
+function getMostRecentTrackedPhone() {
+  let latest = null;
+  for (const item of messageBanditMap.values()) {
+    if (!item?.phone || !item?.createdAt) continue;
+    if (!latest || item.createdAt > latest.createdAt) latest = item;
+  }
+  return latest?.phone || '';
+}
+
+function findEventIdByJidAlias(value) {
+  const aliasKey = normalizeJidAlias(value);
+  if (!aliasKey) return null;
+  const hit = jidAliasToEventMap.get(aliasKey);
+  return hit?.eventId || null;
+}
+
+function registerSentBanditEvent(messageObj, eventId, phone) {
+  cleanupTrackingMaps();
+  const phoneDigits = normalizePhoneDigits(phone);
+  if (!messageObj || !eventId || !phoneDigits) return;
+
+  const messageId = messageObj?.id?._serialized || messageObj?.id?.id || null;
+  if (messageId) {
+    messageBanditMap.set(String(messageId), { eventId: Number(eventId), phone: phoneDigits, createdAt: Date.now() });
+  }
+
+  registerJidAlias(messageObj?.to, phoneDigits);
+  registerJidAlias(messageObj?.from, phoneDigits);
+  registerJidAlias(messageObj?.id?.remote, phoneDigits);
+  registerJidAlias(messageObj?.author, phoneDigits);
+  registerJidEventAlias(messageObj?.to, eventId);
+  registerJidEventAlias(messageObj?.id?.remote, eventId);
+}
 
 function roomForUser(username) {
   return `user:${username}`;
@@ -102,6 +199,11 @@ function registerMessageHandlers(client, username) {
         sender = msg.author;
       }
       if (!sender) return;
+      if (sender === 'status@broadcast') return;
+      let matchedSenderPhone = mapIncomingToKnownPhone(sender);
+      if (!matchedSenderPhone || String(matchedSenderPhone).length < 8) {
+        matchedSenderPhone = getMostRecentTrackedPhone();
+      }
 
       const text = (msg.body || '').trim();
 
@@ -137,20 +239,42 @@ function registerMessageHandlers(client, username) {
         console.warn('[WA] minat_prodi inference error:', e?.message);
       }
 
-      // FIX 4: added 48-hour time window to prevent rewarding old blast events
-      const rows = db.prepare(`
-        SELECT * FROM bandit_events 
-        WHERE phone = ? AND reward IS NULL 
-        AND created_at > datetime('now', '-48 hours')
-        ORDER BY created_at DESC
-      `).all(sender);
+      const eventIdByAlias = findEventIdByJidAlias(sender);
+      if (eventIdByAlias) {
+        try {
+          await banditService.updateEventDeliveryStatus(eventIdByAlias, 'delivered', 1, 1);
+          console.log(`[Bandit] Reply mapped by alias to event ${eventIdByAlias}`);
+          return;
+        } catch (err) {
+          console.warn(`[Bandit] Alias->event update failed (${eventIdByAlias}), fallback to phone lookup:`, err?.message);
+        }
+      }
+
+      const aliasEvents = await banditService.findRecentEventsByWaAlias(sender, { hours: 48, limit: 5 });
+      if (aliasEvents.length > 0) {
+        const ev = aliasEvents[0];
+        try {
+          await banditService.updateEventDeliveryStatus(ev.id, 'delivered', 1, 1);
+          console.log(`[Bandit] Reply mapped by Firestore alias to event ${ev.id}`);
+          return;
+        } catch (err) {
+          console.warn(`[Bandit] Firestore alias update failed (${ev.id}), fallback to phone lookup:`, err?.message);
+        }
+      }
+
+      // Find recent pending bandit events in Firebase for this sender
+      const rows = await banditService.findRecentEventsByPhone(matchedSenderPhone, {
+        hours: 48,
+        onlyPendingReward: false,
+        limit: 20,
+      });
 
       if (!rows || rows.length === 0) {
-        console.log(`[Bandit] No pending events found for reply from: ${sender}`);
+        console.log(`[Bandit] No pending events found for reply from: ${sender} (mapped: ${matchedSenderPhone || '-'})`);
         return;
       }
 
-      console.log(`[Bandit] Found ${rows.length} pending events for reply from: ${sender}`);
+      console.log(`[Bandit] Found ${rows.length} pending events for reply from: ${sender} (mapped: ${matchedSenderPhone || '-'})`);
 
       const windowHours = Number(process.env.BANDIT_FEEDBACK_WINDOW_HOURS) || 24;
       const now = Date.now();
@@ -161,10 +285,14 @@ function registerMessageHandlers(client, username) {
         if (hours <= windowHours) {
           try {
             console.log(`[Bandit] Processing reply for event ${ev.id}`);
-            db.prepare(`UPDATE bandit_events SET reply_received = 1 WHERE id = ?`).run(ev.id);
-            console.log(`[Bandit] Event ${ev.id} marked as replied`);
-
-            const res = await banditService.feedback(ev.id, 1);
+            const currentDelivery =
+              ev.delivery_status === 'failed'
+                ? 'failed'
+                : ev.delivery_status === 'delivered' || ev.delivery_status === 'sent'
+                  ? ev.delivery_status
+                  : 'delivered';
+            const readStatus = Number(ev.read_status) === 1 ? 1 : 0;
+            const res = await banditService.updateEventDeliveryStatus(ev.id, currentDelivery, readStatus, 1);
             console.log(`[Bandit] Event ${ev.id} auto-rewarded for reply`);
             if (io) io.to(roomForUser(username)).emit('bandit:auto_feedback', { eventId: ev.id, phone: sender, reward: 1, result: res });
           } catch (err) {
@@ -181,16 +309,29 @@ function registerMessageHandlers(client, username) {
     try {
       if (!msg || !msg.to) return;
 
-      const to = msg.to.replace('@c.us', '').replace('@g.us', '');
-      console.log(`[Bandit] Message ACK - phone: ${to}, ack level: ${ack}`);
+      cleanupTrackingMaps();
+      const messageId = msg?.id?._serialized || msg?.id?.id || null;
+      const mappedFromMessage = messageId ? messageBanditMap.get(String(messageId)) : null;
 
-      // FIX 4: added 48-hour time window to prevent matching old blast events
-      const events = db.prepare(`
-        SELECT * FROM bandit_events 
-        WHERE phone LIKE ? 
-        AND created_at > datetime('now', '-48 hours')
-        ORDER BY created_at DESC LIMIT 5
-      `).all(`%${to}%`);
+      const toRaw = msg.to;
+      const to = mapIncomingToKnownPhone(toRaw);
+      console.log(`[Bandit] Message ACK - phone: ${toRaw}, mapped: ${to}, ack level: ${ack}`);
+
+      if (mappedFromMessage?.phone) {
+        registerJidAlias(toRaw, mappedFromMessage.phone);
+        if (msg?.id?.remote) registerJidAlias(msg.id.remote, mappedFromMessage.phone);
+      }
+
+      let events = [];
+      if (mappedFromMessage?.eventId) {
+        events = [{ id: mappedFromMessage.eventId, read_status: ack >= 3 ? 1 : 0, reply_received: 0 }];
+      } else {
+        events = await banditService.findRecentEventsByPhone(to, {
+          hours: 48,
+          onlyPendingReward: false,
+          limit: 5,
+        });
+      }
 
       if (events.length === 0) {
         console.log(`[Bandit] No recent events found for phone: ${to}`);
@@ -201,23 +342,28 @@ function registerMessageHandlers(client, username) {
 
       for (const ev of events) {
         console.log(`[Bandit] Updating event ${ev.id} - ack: ${ack}`);
+        registerJidEventAlias(toRaw, ev.id);
+        if (msg?.id?.remote) registerJidEventAlias(msg.id.remote, ev.id);
+        try {
+          const aliases = [normalizeRawDigits(toRaw), normalizeRawDigits(msg?.id?.remote)].filter(Boolean);
+          await banditService.attachWhatsAppMetadata(ev.id, {
+            wa_message_id: messageId ? String(messageId) : null,
+            wa_aliases: aliases,
+          });
+        } catch (metaErr) {
+          console.warn('[Bandit] Failed to attach WhatsApp metadata:', metaErr?.message);
+        }
 
         if (ack >= 2) {
-          db.prepare(`UPDATE bandit_events SET delivery_status = 'delivered' WHERE id = ?`).run(ev.id);
           console.log(`[Bandit] Event ${ev.id} marked as delivered`);
+          const replyStatus = Number(ev.reply_received) === 1 ? 1 : 0;
+          await banditService.updateEventDeliveryStatus(ev.id, 'delivered', Number(ev.read_status) === 1 ? 1 : 0, replyStatus);
         }
         if (ack >= 3) {
-          db.prepare(`UPDATE bandit_events SET read_status = 1 WHERE id = ?`).run(ev.id);
           console.log(`[Bandit] Event ${ev.id} marked as read`);
-
-          if (process.env.BANDIT_ENABLED === 'true') {
-            try {
-              await banditService.updateEventDeliveryStatus(ev.id, 'delivered', 1, 0);
-              console.log(`[Bandit] Event ${ev.id} auto-rewarded for read`);
-            } catch (err) {
-              console.warn('[Bandit] Failed to auto-reward read:', err?.message);
-            }
-          }
+          const replyStatus = Number(ev.reply_received) === 1 ? 1 : 0;
+          await banditService.updateEventDeliveryStatus(ev.id, 'delivered', 1, replyStatus);
+          console.log(`[Bandit] Event ${ev.id} auto-rewarded for read`);
         }
       }
     } catch (err) {
@@ -415,9 +561,9 @@ async function sendMessage(phone, message, username) {
   }
 
   try {
-    await client.sendMessage(chatId, message);
+    const sentMessage = await client.sendMessage(chatId, message);
     console.log(`[WA] Message sent to ${phone}`);
-    return true;
+    return sentMessage;
   } catch (err) {
     console.error(`[WA] sendMessage failed for ${phone}:`, err?.message);
     throw err;
@@ -445,9 +591,9 @@ async function sendMessageWithMedia(phone, message, mediaPath, username) {
       ? await MessageMedia.fromUrl(mediaPath, { unsafeMime: true })
       : MessageMedia.fromFilePath(mediaPath);
 
-    await client.sendMessage(chatId, media, { caption: message || '' });
+    const sentMessage = await client.sendMessage(chatId, media, { caption: message || '' });
     console.log(`[WA] Media message sent to ${phone}`);
-    return true;
+    return sentMessage;
   } catch (err) {
     console.error(`[WA] sendMessageWithMedia failed for ${phone}:`, err?.message);
     throw err;
@@ -508,4 +654,5 @@ module.exports = {
   normalizePhone,
   roomForUser,
   destroyAllClients,
+  registerSentBanditEvent,
 };
