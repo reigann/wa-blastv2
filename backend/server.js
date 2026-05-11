@@ -111,7 +111,7 @@ if (STORAGE_PROVIDER === 'firebase') {
   app.use('/api/contacts', requireAuth, contactRoutes);
   app.use('/api/templates', requireAuth, templateRoutes);
   app.use('/api/blast', requireAuth, blastRoutes);
-  app.use('/api/clustering', requireAuth, clusteringRoutes);
+  app.use('/api/clustering', requireAuth, clusteringRoutes); // Restored requireAuth
   
   // UBAH BARIS INI (Hapus requireAuth)
   app.use('/api/bandit', banditRoutes); 

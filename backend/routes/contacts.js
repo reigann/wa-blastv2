@@ -120,7 +120,7 @@ router.post('/upload', upload.single('file'), (req, res) => {
     if (err) return res.status(500).json({ error: err.message });
 
     const delimiter = data.split('\n')[0].includes('\t') ? '\t' : ',';
-    const options = { delimiter, headers: true, mapHeaders: ({ header }) => header.trim() };
+    const options = { delimiter, headers: false };
 
     fs.createReadStream(filePath)
       .pipe(csv(options))
@@ -131,15 +131,19 @@ router.post('/upload', upload.single('file'), (req, res) => {
 
         if (!results.length) return res.status(400).json({ error: 'File CSV kosong' });
 
-        const headers = Object.keys(results[0]);
-        const phoneCol = headers.find((h) => /phone|nomor/i.test(h)) || headers[1] || headers[0];
-        const nameCol = headers.find((h) => /nama|name/i.test(h)) || headers[0] || headers[1];
-        const prodiCol = headers.find((h) => /prodi|program/i.test(h)) || headers[2];
-        const sekolahCol = headers.find((h) => /sekolah|asal/i.test(h)) || headers[3];
+        // Extract headers from first row
+        const headerRow = results[0];
+        const headers = Object.values(headerRow).map(h => h.trim());
+        const dataRows = results.slice(1);
+
+        const phoneCol = headers.findIndex((h) => /phone|nomor/i.test(h));
+        const nameCol = headers.findIndex((h) => /nama|name/i.test(h));
+        const prodiCol = headers.findIndex((h) => /prodi|program/i.test(h));
+        const sekolahCol = headers.findIndex((h) => /sekolah|asal/i.test(h));
 
         try {
           const db = getFirestore();
-          for (const c of results) {
+          for (const c of dataRows) {
             const phone = normalizePhone(c[phoneCol]);
             if (!phone) {
               skipped++;
@@ -167,7 +171,7 @@ router.post('/upload', upload.single('file'), (req, res) => {
           }
 
           fs.unlinkSync(filePath);
-          res.json({ success: true, imported, skipped, total: results.length });
+          res.json({ success: true, imported, skipped, total: dataRows.length });
         } catch (e) {
           fs.unlinkSync(filePath);
           res.status(500).json({ error: e.message });
@@ -189,7 +193,7 @@ router.post('/upload/preview', upload.single('file'), (req, res) => {
     if (err) return res.status(500).json({ error: err.message });
 
     const delimiter = data.split('\n')[0].includes('\t') ? '\t' : ',';
-    const options = { delimiter, headers: true, mapHeaders: ({ header }) => header.trim() };
+    const options = { delimiter, headers: false };
 
     fs.createReadStream(filePath)
       .pipe(csv(options))
@@ -200,13 +204,17 @@ router.post('/upload/preview', upload.single('file'), (req, res) => {
           return res.status(400).json({ error: 'File CSV kosong' });
         }
 
-        const headers = Object.keys(results[0]);
-        const phoneCol = headers.find((h) => /phone|nomor/i.test(h)) || headers[1] || headers[0];
-        const nameCol = headers.find((h) => /nama|name/i.test(h)) || headers[0] || headers[1];
-        const prodiCol = headers.find((h) => /prodi|program/i.test(h)) || headers[2];
-        const sekolahCol = headers.find((h) => /sekolah|asal/i.test(h)) || headers[3];
+        // Extract headers from first row
+        const headerRow = results[0];
+        const headers = Object.values(headerRow).map(h => h.trim());
+        const dataRows = results.slice(1);
 
-        const rows = results.map((c, idx) => {
+        const phoneCol = headers.findIndex((h) => /phone|nomor/i.test(h));
+        const nameCol = headers.findIndex((h) => /nama|name/i.test(h));
+        const prodiCol = headers.findIndex((h) => /prodi|program/i.test(h));
+        const sekolahCol = headers.findIndex((h) => /sekolah|asal/i.test(h));
+
+        const rows = dataRows.map((c, idx) => {
           const phone = normalizePhone(c[phoneCol]);
           return {
             __idx: idx,

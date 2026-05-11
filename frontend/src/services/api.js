@@ -103,7 +103,7 @@ export const banditAPI = {
 };
 
 export const clusteringAPI = {
-  run: (data) => api.post('/clustering/run', data),
+  run: (data) => api.post('/clustering/run', data, { timeout: 180000 }),
   latest: () => api.get('/clustering/latest'),
   contactsByCluster: (clusterId) => api.get(`/clustering/contacts-by-cluster/${clusterId}`),
   clear: () => api.delete('/clustering/clear'),

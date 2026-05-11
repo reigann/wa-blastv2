@@ -524,7 +524,19 @@ async function getTemplateRecommendation(templateIds = [], policyId = null, opti
       replied: 0,
       failed: 0,
       score: 0,
+      last_session: null,
     };
+    const sessionStats = {};
+    sessionIds.forEach((sid) => {
+      sessionStats[sid] = {
+        session_id: String(sid),
+        sent: 0,
+        delivered: 0,
+        read: 0,
+        replied: 0,
+        failed: 0,
+      };
+    });
 
     for (let i = 0; i < sessionIds.length; i += 30) {
       const chunk = sessionIds.slice(i, i + 30);
@@ -533,13 +545,49 @@ async function getTemplateRecommendation(templateIds = [], policyId = null, opti
       eventsSnap.docs.forEach((eventDoc) => {
         const ev = eventDoc.data() || {};
         if (filterByDateRange([ev], options).length === 0) return;
+        const sid = String(ev.session_id || '');
         const delivery = ev.delivery_status || 'pending';
         stat.sent += 1;
         if (delivery === 'delivered' || delivery === 'sent') stat.delivered += 1;
         if (delivery === 'failed') stat.failed += 1;
         if (Number(ev.read_status) === 1) stat.read += 1;
         if (Number(ev.reply_received) === 1) stat.replied += 1;
+        if (sid && sessionStats[sid]) {
+          sessionStats[sid].sent += 1;
+          if (delivery === 'delivered' || delivery === 'sent') sessionStats[sid].delivered += 1;
+          if (delivery === 'failed') sessionStats[sid].failed += 1;
+          if (Number(ev.read_status) === 1) sessionStats[sid].read += 1;
+          if (Number(ev.reply_received) === 1) sessionStats[sid].replied += 1;
+        }
       });
+    }
+
+    const lastSession = sessions
+      .slice()
+      .sort((a, b) => getEventMillis(b) - getEventMillis(a))[0] || null;
+    if (lastSession) {
+      const lastSessionId = String(lastSession.id);
+      const lastStats = sessionStats[lastSessionId] || {
+        session_id: lastSessionId,
+        sent: 0,
+        delivered: 0,
+        read: 0,
+        replied: 0,
+        failed: 0,
+      };
+      const safeLastSent = Math.max(1, lastStats.sent);
+      stat.last_session = {
+        session_id: lastSessionId,
+        session_name: lastSession.name || null,
+        created_at: lastSession.created_at || null,
+        sent: lastStats.sent,
+        delivered: lastStats.delivered,
+        failed: lastStats.failed,
+        read: lastStats.read,
+        replied: lastStats.replied,
+        read_rate: Number(((lastStats.read / safeLastSent) * 100).toFixed(1)),
+        reply_rate: Number(((lastStats.replied / safeLastSent) * 100).toFixed(1)),
+      };
     }
 
     globalSent += stat.sent;

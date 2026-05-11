@@ -64,25 +64,15 @@ class ClusteringServiceWrapper {
           return reject(new Error('Python is not installed or not found in PATH. Clustering feature is unavailable.'));
         }
 
-        // Prepare data
-        const sentLogCountStmt = db.prepare(`
-          SELECT COUNT(*) AS total_sent
-          FROM blast_logs
-          WHERE phone = ? AND status = 'sent'
-        `);
-
-        const contactData = contacts.map((c) => {
-          const logStats = sentLogCountStmt.get(c.phone);
-
-          return {
-            id: c.id,
-            group_name: c.group_name || 'default',
-            created_at: c.created_at,
-            message_count: logStats?.total_sent || 0,
-            minat_prodi: c.minat_prodi || 'Teknik Informatika',
-            asal_sekolah: c.asal_sekolah || 'unknown',
-          };
-        });
+        // Prepare data - use message_count already provided or from contact object
+        const contactData = contacts.map((c) => ({
+          id: c.id,
+          group_name: c.group_name || 'default',
+          created_at: c.created_at,
+          message_count: Number(c.message_count || 0),
+          minat_prodi: c.minat_prodi || 'Teknik Informatika',
+          asal_sekolah: c.asal_sekolah || 'unknown',
+        }));
 
         const args = [
           "-u",

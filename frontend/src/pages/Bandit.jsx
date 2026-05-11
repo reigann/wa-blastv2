@@ -53,6 +53,9 @@ export default function BanditPage() {
       )}
 
       <div className="mb-4">
+        <Alert variant="light" className="mb-3 border">
+          <strong>Info:</strong> Label <strong>Strategi 1, Strategi 2, ...</strong> adalah varian pesan/waktu kirim yang sedang dibandingkan oleh Bandit untuk mencari performa terbaik.
+        </Alert>
         <div className="row">
           <div className="col-md-12">
             <label className="form-label fw-bold">Select Bandit Policy:</label>
