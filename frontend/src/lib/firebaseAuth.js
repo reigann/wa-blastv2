@@ -1,5 +1,5 @@
 import { initializeApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider, signInWithPopup } from 'firebase/auth';
+import { getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult } from 'firebase/auth';
 
 const firebaseConfig = {
   apiKey: "AIzaSyBZSLXNR1UscI7MhUb8WNE3fBeyM3qU0P4",
@@ -17,7 +17,27 @@ const auth = getAuth(app);
 const googleProvider = new GoogleAuthProvider();
 
 export async function signInWithGoogleFirebase() {
-  const result = await signInWithPopup(auth, googleProvider);
+  try {
+    const result = await signInWithPopup(auth, googleProvider);
+    const idToken = await result.user.getIdToken(true);
+    return { idToken, firebaseUser: result.user, mode: 'popup' };
+  } catch (error) {
+    const code = String(error?.code || '');
+    const isPopupIssue =
+      code.includes('popup') ||
+      code.includes('cancelled-popup-request') ||
+      code.includes('operation-not-supported-in-this-environment');
+
+    if (!isPopupIssue) throw error;
+
+    await signInWithRedirect(auth, googleProvider);
+    return { pendingRedirect: true, mode: 'redirect' };
+  }
+}
+
+export async function getGoogleRedirectSignInResult() {
+  const result = await getRedirectResult(auth);
+  if (!result?.user) return null;
   const idToken = await result.user.getIdToken(true);
-  return { idToken, firebaseUser: result.user };
+  return { idToken, firebaseUser: result.user, mode: 'redirect' };
 }

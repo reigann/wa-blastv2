@@ -52,6 +52,16 @@ export default function Blast() {
   const [sending, setSending] = useState(false);
   const [scrollTop, setScrollTop] = useState(0);
   const listRef = useRef(null);
+  const recommendedTemplate = useMemo(
+    () => templates.find((t) => String(t.id) === String(templateRecommendation?.recommended_template_id)),
+    [templates, templateRecommendation]
+  );
+  const recommendedCandidate = useMemo(
+    () => (templateRecommendation?.candidates || []).find(
+      (item) => String(item.template_id) === String(templateRecommendation?.recommended_template_id)
+    ) || null,
+    [templateRecommendation]
+  );
 
   useEffect(() => {
     loadData();
@@ -311,15 +321,26 @@ export default function Blast() {
                   <h3 className="mb-3">Choose Template</h3>
                   {templateRecommendation?.recommended_template_id && (
                     <Card className="mb-3 border-success">
-                      <Card.Body className="py-2 d-flex justify-content-between align-items-center">
+                      <Card.Body className="py-2 d-flex justify-content-between align-items-center flex-wrap gap-3">
                         <div>
                           <div className="fw-semibold text-success mb-1">Bandit Template Recommendation</div>
                           <div className="small text-secondary">
                             Berdasarkan performa read/reply historis, template terbaik saat ini:
                             <strong className="ms-1">
-                              {templates.find((t) => String(t.id) === String(templateRecommendation.recommended_template_id))?.name || `Template #${templateRecommendation.recommended_template_id}`}
+                              {recommendedTemplate?.name || `Template #${templateRecommendation.recommended_template_id}`}
                             </strong>
                           </div>
+                          {recommendedCandidate?.last_session ? (
+                            <div className="small mt-1">
+                              <span className="text-secondary">Blast terakhir:</span>
+                              <span className="ms-2">
+                                Read <strong>{recommendedCandidate.last_session.read}</strong>
+                              </span>
+                              <span className="ms-2">
+                                Reply <strong>{recommendedCandidate.last_session.replied}</strong>
+                              </span>
+                            </div>
+                          ) : null}
                         </div>
                         <Button
                           variant="outline-success"

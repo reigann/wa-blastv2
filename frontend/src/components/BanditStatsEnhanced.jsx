@@ -1,4 +1,4 @@
-import { memo, useEffect, useState } from 'react';
+import { memo, useEffect, useMemo, useState } from 'react';
 import { Card, Col, Row, Badge, Spinner, Alert, Tab, Tabs, Table } from 'react-bootstrap';
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Cell } from 'recharts';
 import { banditAPI, templatesAPI } from '../services/api';
@@ -15,6 +15,8 @@ const BanditStatsEnhanced = memo(function BanditStatsEnhanced({ policyId, sessio
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [templateRecommendation, setTemplateRecommendation] = useState(null);
+  const [templates, setTemplates] = useState([]);
+  const formatStrategyLabel = (arm) => `Strategi ${Number(arm) + 1}`;
 
   useEffect(() => {
     if (!policyId && !sessionId) return;
@@ -53,6 +55,7 @@ const BanditStatsEnhanced = memo(function BanditStatsEnhanced({ policyId, sessio
           }
 
           const templateRes = await templatesAPI.getAll();
+          setTemplates(Array.isArray(templateRes.data) ? templateRes.data : []);
           const templateIds = Array.isArray(templateRes.data) ? templateRes.data.map((t) => t.id) : [];
           if (templateIds.length > 0) {
             const tResponse = await banditAPI.recommendTemplate(templateIds, policyId, startDate || null, endDate || null);
@@ -86,19 +89,6 @@ const BanditStatsEnhanced = memo(function BanditStatsEnhanced({ policyId, sessio
     return () => clearInterval(interval);
   }, [policyId, sessionId, startDate, endDate]);
 
-  if (loading && !policyStats && !stats) {
-    return (
-      <div className="text-center py-5">
-        <Spinner animation="border" variant="success" />
-        <p className="mt-3 text-muted">Loading statistics...</p>
-      </div>
-    );
-  }
-
-  if (error && !policyStats && !stats) {
-    return <Alert variant="danger">{error}</Alert>;
-  }
-
   const getStatusBadge = (status) => {
     if (status === 'delivered') return <Badge bg="success">✓ Delivered</Badge>;
     if (status === 'failed') return <Badge bg="danger">✗ Failed</Badge>;
@@ -115,7 +105,7 @@ const BanditStatsEnhanced = memo(function BanditStatsEnhanced({ policyId, sessio
 
   const armChartData = policyStats?.arms
     ? Object.values(policyStats.arms).map((arm) => ({
-        arm: `Arm ${arm.arm}`,
+        arm: formatStrategyLabel(arm.arm),
         sent: Number(arm.sent_count || 0),
         delivered: Number(arm.delivered_count || 0),
         read: Number(arm.read_count || 0),
@@ -123,6 +113,29 @@ const BanditStatsEnhanced = memo(function BanditStatsEnhanced({ policyId, sessio
         avg_reward: Number(arm.avg_reward || 0),
       }))
     : [];
+  const recommendedTemplate = useMemo(
+    () => templates.find((t) => String(t.id) === String(templateRecommendation?.recommended_template_id)) || null,
+    [templates, templateRecommendation]
+  );
+  const recommendedCandidate = useMemo(
+    () => (templateRecommendation?.candidates || []).find(
+      (item) => String(item.template_id) === String(templateRecommendation?.recommended_template_id)
+    ) || null,
+    [templateRecommendation]
+  );
+
+  if (loading && !policyStats && !stats) {
+    return (
+      <div className="text-center py-5">
+        <Spinner animation="border" variant="success" />
+        <p className="mt-3 text-muted">Loading statistics...</p>
+      </div>
+    );
+  }
+
+  if (error && !policyStats && !stats) {
+    return <Alert variant="danger">{error}</Alert>;
+  }
 
   return (
     <div className="bandit-stats-enhanced">
@@ -159,14 +172,14 @@ const BanditStatsEnhanced = memo(function BanditStatsEnhanced({ policyId, sessio
               <div>
                 <strong>Best Template (Bandit)</strong>
                 <div className="small text-muted">
-                  Template ID: {templateRecommendation.recommended_template_id}
+                  {recommendedTemplate?.name || `Template #${templateRecommendation.recommended_template_id}`}
                 </div>
               </div>
               <Badge bg="warning" text="dark">Recommended</Badge>
             </div>
-            {Array.isArray(templateRecommendation.candidates) && templateRecommendation.candidates.length > 0 && (
+            {recommendedCandidate && (
               <div className="small mt-2">
-                Top score: {templateRecommendation.candidates[0].score} | Read: {templateRecommendation.candidates[0].read_rate}% | Reply: {templateRecommendation.candidates[0].reply_rate}%
+                Top score: {recommendedCandidate.score} | Read: {recommendedCandidate.last_session?.read ?? recommendedCandidate.read ?? 0} | Reply: {recommendedCandidate.last_session?.replied ?? recommendedCandidate.replied ?? 0}
               </div>
             )}
           </Card.Body>
@@ -306,7 +319,7 @@ const BanditStatsEnhanced = memo(function BanditStatsEnhanced({ policyId, sessio
               <Col lg={6} className="mb-4">
                 <Card>
                   <Card.Header className="bg-light">
-                    <strong>Arm Engagement Comparison</strong>
+                    <strong>Perbandingan Engagement Strategi</strong>
                   </Card.Header>
                   <Card.Body>
                     <ResponsiveContainer width="100%" height={260}>
@@ -329,7 +342,7 @@ const BanditStatsEnhanced = memo(function BanditStatsEnhanced({ policyId, sessio
         </Tab>
 
         {/* ARM COMPARISON TAB */}
-        <Tab eventKey="arms" title="🎯 Arm Performance">
+        <Tab eventKey="arms" title="🎯 Performa Strategi">
           {policyStats && policyStats.arms && (
             <>
               <Row className="mb-4">
@@ -338,7 +351,7 @@ const BanditStatsEnhanced = memo(function BanditStatsEnhanced({ policyId, sessio
                     <Card>
                       <Card.Body>
                         <div className="d-flex justify-content-between align-items-center mb-3">
-                          <h6 className="mb-0">Arm {arm.arm}</h6>
+                          <h6 className="mb-0">{formatStrategyLabel(arm.arm)}</h6>
                           {arm.avg_reward > 0.7 && <Badge bg="success">Top</Badge>}
                         </div>
                         <table className="table table-sm mb-0">
@@ -524,7 +537,7 @@ const BanditStatsEnhanced = memo(function BanditStatsEnhanced({ policyId, sessio
                   {recentEvents.slice(0, 50).map((ev) => (
                     <tr key={ev.id}>
                       <td className="small">{ev.id}</td>
-                      <td><Badge bg="secondary">Arm {ev.arm}</Badge></td>
+                      <td><Badge bg="secondary">{formatStrategyLabel(ev.arm)}</Badge></td>
                       <td>{getStatusBadge(ev.delivery_status)}</td>
                       <td>{ev.read_status === 1 ? '👁' : '-'}</td>
                       <td>{ev.reply_received === 1 ? '💬' : '-'}</td>

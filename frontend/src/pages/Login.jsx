@@ -1,18 +1,48 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Button, Card, Spinner } from 'react-bootstrap';
 import toast from 'react-hot-toast';
 import axios from 'axios';
 import { setAuthToken, setAuthUser } from '../lib/auth';
-import { signInWithGoogleFirebase } from '../lib/firebaseAuth';
+import { getGoogleRedirectSignInResult, signInWithGoogleFirebase } from '../lib/firebaseAuth';
 import { BACKEND_URL } from '../lib/config';
 
 export default function Login({ onLoginSuccess }) {
   const [loading, setLoading] = useState(false);
 
+  useEffect(() => {
+    let mounted = true;
+    async function bootstrapRedirectLogin() {
+      setLoading(true);
+      try {
+        const redirectResult = await getGoogleRedirectSignInResult();
+        if (!redirectResult?.idToken) return;
+        const response = await axios.post(`${BACKEND_URL}/api/auth/firebase`, { idToken: redirectResult.idToken });
+        const { token, user } = response.data;
+        setAuthToken(token);
+        setAuthUser(user);
+        if (!mounted) return;
+        toast.success(`Login berhasil sebagai ${user?.name || user?.email}`);
+        onLoginSuccess?.(user);
+      } catch (err) {
+        const msg = err?.response?.data?.error || err.message || 'Login failed';
+        if (mounted) {
+          toast.error(`Login gagal: ${msg}`);
+        }
+      } finally {
+        if (mounted) setLoading(false);
+      }
+    }
+    bootstrapRedirectLogin();
+    return () => {
+      mounted = false;
+    };
+  }, [onLoginSuccess]);
+
   const handleGoogleLogin = async () => {
     setLoading(true);
     try {
-      const { idToken } = await signInWithGoogleFirebase();
+      const { idToken, pendingRedirect } = await signInWithGoogleFirebase();
+      if (pendingRedirect) return;
       const response = await axios.post(`${BACKEND_URL}/api/auth/firebase`, { idToken });
       const { token, user } = response.data;
 

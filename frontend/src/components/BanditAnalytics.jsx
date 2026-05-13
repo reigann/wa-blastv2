@@ -19,6 +19,7 @@ const BanditAnalytics = memo(function BanditAnalytics({ policyId }) {
   const [analytics, setAnalytics] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const formatStrategyLabel = (armId) => `Strategi ${Number(armId) + 1}`;
 
   useEffect(() => {
     if (!policyId) return;
@@ -80,7 +81,7 @@ const BanditAnalytics = memo(function BanditAnalytics({ policyId }) {
   if (!analytics || Object.keys(analytics).length === 0) {
     return (
       <Alert variant="warning" className="mb-4">
-        No data yet. Run a campaign to see arm performance analytics.
+        No data yet. Run a campaign to see strategy performance analytics.
       </Alert>
     );
   }
@@ -104,21 +105,21 @@ const BanditAnalytics = memo(function BanditAnalytics({ policyId }) {
 
   // Data for bar chart (avg reward comparison)
   const rewardChartData = arms.map(arm => ({
-    arm: `Arm ${Number(arm.arm_id)}`,
+    arm: formatStrategyLabel(arm.arm_id),
     avg_reward: Number((arm.avg_reward || 0).toFixed(2)),
     total_reward: Number((arm.total_reward || 0).toFixed(2)),
   })).filter(item => !isNaN(item.avg_reward) && !isNaN(item.total_reward));
 
   // Data for line chart (success vs failure)
   const successChartData = arms.map(arm => ({
-    arm: `Arm ${Number(arm.arm_id)}`,
+    arm: formatStrategyLabel(arm.arm_id),
     successful: Number(arm.successful_count || 0),
     failed: Number(arm.failed_count || 0),
   })).filter(item => !isNaN(item.successful) && !isNaN(item.failed));
 
   // Data for engagement metrics
   const engagementChartData = arms.map(arm => ({
-    arm: `Arm ${Number(arm.arm_id)}`,
+    arm: formatStrategyLabel(arm.arm_id),
     read: Number(arm.read_count || 0),
     reply: Number(arm.reply_count || 0),
   })).filter(item => !isNaN(item.read) && !isNaN(item.reply));
@@ -133,9 +134,12 @@ const BanditAnalytics = memo(function BanditAnalytics({ policyId }) {
       {/* Header */}
       <Row className="mb-4">
         <Col>
-          <h5 className="mb-3">🤖 Multi-Armed Bandit - Arm Performance</h5>
+          <h5 className="mb-3">🤖 Multi-Armed Bandit - Strategy Performance</h5>
           <p className="text-muted small">
-            Best performing arm: <strong>Arm {bestArm.arm_id}</strong> with avg reward{' '}
+            Di sini strategi = varian yang dibandingkan bandit (sebelumnya disebut arm).
+          </p>
+          <p className="text-muted small">
+            Best performing strategy: <strong>{formatStrategyLabel(bestArm.arm_id)}</strong> with avg reward{' '}
             <Badge bg="success" className="ms-2">{bestArm.avg_reward.toFixed(2)}</Badge>
           </p>
         </Col>
@@ -154,7 +158,7 @@ const BanditAnalytics = memo(function BanditAnalytics({ policyId }) {
               <Card className={`h-100 ${isOptimal ? 'border-success border-3' : ''}`}>
                 <Card.Body>
                   <div className="d-flex justify-content-between align-items-start mb-3">
-                    <h6 className="mb-0">Arm {arm.arm_id}</h6>
+                    <h6 className="mb-0">{formatStrategyLabel(arm.arm_id)}</h6>
                     {isOptimal && <Badge bg="success">Best</Badge>}
                   </div>
 
@@ -206,7 +210,7 @@ const BanditAnalytics = memo(function BanditAnalytics({ policyId }) {
         <Col lg={6} className="mb-4">
           <Card>
             <Card.Header className="bg-light">
-              <strong>Average Reward by Arm</strong>
+              <strong>Average Reward by Strategy</strong>
             </Card.Header>
             <Card.Body>
               <ResponsiveContainer width="100%" height={280}>
@@ -296,13 +300,13 @@ const BanditAnalytics = memo(function BanditAnalytics({ policyId }) {
         <Col className="mb-4">
           <Card>
             <Card.Header className="bg-light">
-              <strong>Detailed Arm Statistics</strong>
+              <strong>Detailed Strategy Statistics</strong>
             </Card.Header>
             <Card.Body style={{ overflowX: 'auto' }}>
               <table className="table table-sm table-hover mb-0">
                 <thead className="table-light">
                   <tr>
-                    <th>Arm</th>
+                    <th>Strategy</th>
                     <th>Recommendations</th>
                     <th>Avg Reward</th>
                     <th>Total Reward</th>
@@ -317,7 +321,7 @@ const BanditAnalytics = memo(function BanditAnalytics({ policyId }) {
                   {arms.map((arm) => (
                     <tr key={arm.arm_id} className={arm.arm_id === bestArm.arm_id ? 'table-success' : ''}>
                       <td>
-                        <strong>#{arm.arm_id}</strong>
+                        <strong>{formatStrategyLabel(arm.arm_id)}</strong>
                       </td>
                       <td>{arm.total_recommendations}</td>
                       <td className="text-success">
