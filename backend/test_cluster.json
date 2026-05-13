@@ -1,0 +1,5 @@
+[
+  {"id":"1","group_name":"default","created_at":"2024-01-01","message_count":5,"minat_prodi":"Informatika"},
+  {"id":"2","group_name":"default","created_at":"2024-01-02","message_count":3,"minat_prodi":"Akuntansi"},
+  {"id":"3","group_name":"default","created_at":"2024-01-03","message_count":7,"minat_prodi":"Informatika"}
+]

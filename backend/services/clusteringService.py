@@ -219,13 +219,18 @@ def main():
         selected_features = None
 
         if len(sys.argv) > 2:
-            try:
-                n_clusters = int(sys.argv[2])
-            except ValueError:
-                selected_features = json.loads(sys.argv[2])
+            raw_arg2 = str(sys.argv[2]).strip()
+            # Support empty/null placeholder from wrapper when n_clusters is omitted
+            if raw_arg2 and raw_arg2.lower() not in {'null', 'none', 'undefined'}:
+                try:
+                    n_clusters = int(raw_arg2)
+                except ValueError:
+                    selected_features = json.loads(raw_arg2)
 
         if len(sys.argv) > 3:
-            selected_features = json.loads(sys.argv[3])
+            raw_arg3 = str(sys.argv[3]).strip()
+            if raw_arg3:
+                selected_features = json.loads(raw_arg3)
 
         # Process
         service = ContactClusteringService()

@@ -18,32 +18,64 @@ class ClusteringServiceWrapper {
    * Find Python executable in various locations
    */
   findPython() {
-  const fs = require('fs');
-  const candidates = [];
+    const fs = require('fs');
+    const { execSync } = require('child_process');
+    const backendDir = path.join(__dirname, '..');
+    const candidates = [];
 
-  if (os.platform() === 'win32') {
-    candidates.push(
-      // 1. Cek folder venv (tanpa titik) di dalam backend
-      path.join(__dirname, '../venv/Scripts/python.exe'), 
-      path.join(process.cwd(), 'backend/venv/Scripts/python.exe'),
-      // 2. Tambahkan juga pengecekan .venv (dengan titik) untuk jaga-jaga
-      path.join(__dirname, '../.venv/Scripts/python.exe'),
-      'python.exe',
-      'python3.exe'
-    );
-  } else {
-    candidates.push(
-      path.join(__dirname, '../venv/bin/python'),
-      path.join(__dirname, '../.venv/bin/python'),
-      'python',
-      'python3'
-    );
-  }
+    if (os.platform() === 'win32') {
+      candidates.push(
+        // 1. venv in backend folder (created by setup)
+        path.join(backendDir, 'venv/Scripts/python.exe'),
+        path.join(backendDir, '.venv/Scripts/python.exe'),
+        // 2. System Python in PATH
+        'python.exe',
+        'python3.exe'
+      );
 
-    // Try each candidate - full paths first
+      // 3. Try to find Python from PATH using 'where' command
+      try {
+        const pythonFromWhere = execSync('where python', { encoding: 'utf-8', cwd: backendDir }).trim().split('\n')[0];
+        if (pythonFromWhere && pythonFromWhere.length > 0) {
+          candidates.unshift(pythonFromWhere);
+        }
+      } catch (err) {
+        // 'where' command failed, continue with other candidates
+      }
+    } else {
+      candidates.push(
+        // 1. venv in backend folder
+        path.join(backendDir, 'venv/bin/python'),
+        path.join(backendDir, '.venv/bin/python'),
+        // 2. System Python in PATH
+        'python',
+        'python3'
+      );
+
+      // 3. Try to find Python from PATH using 'which' command
+      try {
+        const pythonFromWhich = execSync('which python', { encoding: 'utf-8', cwd: backendDir }).trim();
+        if (pythonFromWhich && pythonFromWhich.length > 0) {
+          candidates.unshift(pythonFromWhich);
+        }
+      } catch (err) {
+        // 'which' command failed, continue with other candidates
+      }
+    }
+
+    // Try each candidate - verify it exists and is executable
     for (const python of candidates) {
       try {
-        if (fs.existsSync(python)) return python;
+        if (fs.existsSync(python)) {
+          // Verify Python works by checking version
+          try {
+            execSync(`"${python}" --version`, { encoding: 'utf-8', stdio: 'pipe' });
+            return python;
+          } catch (versionErr) {
+            // Python path exists but doesn't work, continue to next
+            continue;
+          }
+        }
       } catch (err) {
         // ignore
       }

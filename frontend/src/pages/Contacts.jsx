@@ -312,6 +312,7 @@ export default function Contacts() {
   const currentPage = Math.min(page, pageCount);
   const startIndex = (currentPage - 1) * pageSize;
   const pageRows = filteredRows.slice(startIndex, startIndex + pageSize);
+  const totalContacts = contacts.length;
 
   const containerHeight = 420;
   const visibleCount = Math.ceil(containerHeight / rowHeight) + 6;
@@ -373,6 +374,27 @@ export default function Contacts() {
               <Button variant="light" className="btn-outline-soft w-100" onClick={exportCsv}>
                 <i className="bi bi-download me-2" />Export
               </Button>
+            </Col>
+          </Row>
+
+          <Row className="g-2 mt-3">
+            <Col md={4}>
+              <div className="rounded-3 border bg-body-tertiary px-3 py-2 h-100">
+                <div className="text-secondary small mb-1">Total Contacts</div>
+                <div className="fs-4 fw-bold lh-1">{totalContacts}</div>
+              </div>
+            </Col>
+            <Col md={4}>
+              <div className="rounded-3 border bg-body-tertiary px-3 py-2 h-100">
+                <div className="text-secondary small mb-1">Filtered Contacts</div>
+                <div className="fs-4 fw-bold lh-1">{filteredRows.length}</div>
+              </div>
+            </Col>
+            <Col md={4}>
+              <div className="rounded-3 border bg-body-tertiary px-3 py-2 h-100">
+                <div className="text-secondary small mb-1">Selected Contacts</div>
+                <div className="fs-4 fw-bold lh-1">{selectedIds.length}</div>
+              </div>
             </Col>
           </Row>
         </Card.Body>
