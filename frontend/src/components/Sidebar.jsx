@@ -40,7 +40,7 @@ export default function Sidebar({ mobileOpen, closeMobile, collapsed, setCollaps
       <aside className={`app-sidebar ${mobileOpen ? 'mobile-open' : ''}`}>
         <div className="sidebar-logo">
           <span className="logo-icon">
-            <i className="bi bi-whatsapp" />
+            <img src="/logo_blaster.png" alt="WA Blaster" style={{ width: 36, height: 36, objectFit: 'contain' }} />
           </span>
           <div className="logo-label">
             <div className="fw-semibold text-white">WA Blaster UPJ</div>

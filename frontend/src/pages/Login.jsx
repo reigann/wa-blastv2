@@ -65,7 +65,7 @@ export default function Login({ onLoginSuccess }) {
         <Card.Body className="p-4 p-md-5">
           <div className="text-center mb-4">
             <div className="logo-icon mx-auto mb-2" style={{ width: 42, height: 42, fontSize: 22 }}>
-              <i className="bi bi-whatsapp" />
+              <img src="/logo_blaster.png" alt="WA Blaster" style={{ width: 42, height: 42, objectFit: 'contain' }} />
             </div>
             <h2 className="mb-1">WA Blaster</h2>
             <p className="text-secondary mb-0">Login Google via Firebase</p>

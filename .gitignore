@@ -28,6 +28,7 @@ uploads/
 # Secrets
 backend/secrets/
 secrets/
+backend/firebase-key.json
 
 # IDE
 .vscode/
