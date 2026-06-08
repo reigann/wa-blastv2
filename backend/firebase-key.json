@@ -1,0 +1,13 @@
+{
+  "type": "service_account",
+  "project_id": "whatsappblaster-c2d77",
+  "private_key_id": "491d19e884b52058f5aa5f22c8319a9857cff1a4",
+  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvwIBADANBgkqhkiG9w0BAQEFAASCBKkwggSlAgEAAoIBAQDa6cS8AO1P0Pnr\nQp/ov2Xyn5Sjh9UMRxVENl7e3wynZ3u6I9+dKWezNFI9j87bbcyPG8HIxfiWY+Dp\nHDjZ04zXIVvrngO9S9M/Z1xrask1NCtrmIndve/+vjN+tn6PZMBf3xNIlMgvw/eK\n+PdxrwBQECdn4lkTz9bfabjzGIMcYBjadexPtldzAS+MibTSTtFLGNQT5guRfKHK\nZCavs346ttGsSRhMvlCAOCS6TnOpaa1703WufGEfzK7UdEQZjno1y+N2YRyTEBZy\nk+iE+gdIVmSbXo9l40yJ2TRfiXigpj0npD5/vk26tDLJcssFJfCng/no2AktuS85\naCULLFHFAgMBAAECggEAUld566mBmfMl/krqMTbFFxTVaQlvppWaNzUoTDaj4Nf4\n3xQdSVVIr0xv3r4X9cuAFRhAtM9aaN8auzQlYjHDmSvwElk2WN6LkB7F0ZWyJzP/\nXRJcUS7fdfd/ERt90Vv5TFZxP2zPO8A/fWOWV4mW2Yap+9ZU4THdRd3TdoTy1BnT\nEfvEvy3ALVbK0Bh5a00unSt8eDv7Te4NgAU7kfMcnPTAoAR8wY+o5dRgFX5EWQMY\nso21Gj3YAKkm25towo4l3gMIpLUFDbc3ChNuhC4Z5EyGrqckLLUFaZJyEgTdKMHr\nbh1ufzm64rvg1qzTLq/HINxC2EncJY6ad7p7N15XZQKBgQD4kMB5bABdKdzTelAq\nLAAq5Tl4YLjZY05GhBWkigJ9+Z0X2yQQwfRKfNX/OheRRePg/N7uWrhIWcHCiQYw\ntThIR6gHi7+5f/rAFrtnhUshLNEj/8/qP0YzpVwsyFdiUmftGfkDIOyHoo8EC45U\nxDIJCxvE6UyOZWFQslQkN/3ftwKBgQDhdfihyeDVMIz8l8hu+dvFtHmuwwebcYN3\nop8ZnDVCGCYT81dY1dD3XYWp+7rJGTQCgF0D8orc1jCQLAs3pXDpQ9EwFuUJhxSq\nNDuHY7nCw2ZQ073jXmj79C57PkURquBmQZBkCqBHIhi0TBOcdxG7d9u43w2ml6vk\n0UeAvPuiYwKBgQCKWCaIbjAVqkMaAS21CyBcv5ApC8xWUgsy/Dj/h0Cz1MY2jOWZ\n3hmVi72ffDm5xWh7xMJfb2a5/hr1p0YmvfZBZICFEqb3G9/4Ia7Ugz+5izQsESkr\ne2QbQqH22tqoAq2NLbOGpkB/jV6EJdpmG3ytw90Ez8SoTIzJWTezoOZQKQKBgQCD\n+EK9qOZSw6Vy4QFwfA45Tmd/dSdJxIr4hxbrrbS66Fm5idGR7S3w7SwlEHUH6xm3\ncR2BBwJjO3iXm0BBpTRPReP3ax9LkWb2Lba+jBAawbdtDlPy97sp54chmpRhQA0z\nraLv/AxPNtURDAraphOaERFqyB08a0ExoZJh97yvEwKBgQCFtEdMby+StEKIepod\n4Ipa1VqATkhdM9SDMQUaGYCyjyjmYSwy+U2M1BoXMJKGvbVr9qkizUUn3s3357qI\nVabcqZK5foojciHu4+9ntaFuzNTSeXcXlASTrt8mmqXUQVXJ+0Pxclr8Pj0H6chU\nvAQZFlPJW92MguFO4lPDrGjT+w==\n-----END PRIVATE KEY-----\n",
+  "client_email": "firebase-adminsdk-fbsvc@whatsappblaster-c2d77.iam.gserviceaccount.com",
+  "client_id": "112705550820154338198",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token",
+  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/firebase-adminsdk-fbsvc%40whatsappblaster-c2d77.iam.gserviceaccount.com",
+  "universe_domain": "googleapis.com"
+}
