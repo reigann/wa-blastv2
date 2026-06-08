@@ -11,7 +11,6 @@ import {
 } from 'react-bootstrap';
 import PageHeader from '../components/PageHeader';
 import StatusBadge from '../components/StatusBadge';
-import BanditPolicySelector from '../components/BanditPolicySelector';
 import { banditAPI, blastAPI, contactsAPI, templatesAPI } from '../services/api';
 import { BACKEND_URL } from '../lib/config';
 
@@ -38,10 +37,8 @@ export default function Blast() {
   const [currentStep, setCurrentStep] = useState(1);
   const [contacts, setContacts] = useState([]);
   const [templates, setTemplates] = useState([]);
-  const [sessionOptions, setSessionOptions] = useState([]);
   const [selectedContactIds, setSelectedContactIds] = useState([]);
   const [selectedTemplate, setSelectedTemplate] = useState(null);
-  const [selectedBanditPolicy, setSelectedBanditPolicy] = useState(null);
   const [templateRecommendation, setTemplateRecommendation] = useState(null);
   const [search, setSearch] = useState('');
   const [filterGroup, setFilterGroup] = useState('all');
@@ -75,7 +72,7 @@ export default function Blast() {
       }
       try {
         const ids = templates.map((t) => t.id);
-        const response = await banditAPI.recommendTemplate(ids, selectedBanditPolicy?.id || null);
+        const response = await banditAPI.recommendTemplate(ids, null);
         if (response.data?.success) {
           setTemplateRecommendation(response.data.recommendation || null);
         } else {
@@ -86,23 +83,20 @@ export default function Blast() {
       }
     }
     loadTemplateRecommendation();
-  }, [templates, selectedBanditPolicy]);
+  }, [templates]);
 
   async function loadData() {
     try {
-      const [contactRes, templateRes, sessionsRes] = await Promise.allSettled([
+      const [contactRes, templateRes] = await Promise.allSettled([
         contactsAPI.getAll(),
         templatesAPI.getAll(),
-        blastAPI.getSessions(),
       ]);
 
       const contactsData = contactRes.status === 'fulfilled' ? contactRes.value.data || [] : [];
       const templatesData = templateRes.status === 'fulfilled' ? templateRes.value.data || [] : [];
-      const sessionsData = sessionsRes.status === 'fulfilled' ? sessionsRes.value.data || [] : [];
 
       setContacts(Array.isArray(contactsData) ? contactsData : []);
       setTemplates(Array.isArray(templatesData) ? templatesData : []);
-      setSessionOptions(Array.isArray(sessionsData) ? sessionsData.slice(0, 8) : []);
 
       if (contactRes.status !== 'fulfilled' || templateRes.status !== 'fulfilled') {
         toast.error('Sebagian data blast gagal dimuat');
@@ -183,12 +177,10 @@ export default function Blast() {
         group_name: filterGroup === 'all' ? contacts[0]?.group_name || 'default' : filterGroup,
         contact_ids: selectedContactIds,
         schedule_at: scheduleEnabled ? new Date(scheduleAt).toISOString() : undefined,
-        policy_id: selectedBanditPolicy?.id || undefined,
       });
       toast.success('Blast started successfully');
       setCurrentStep(1);
       setSelectedContactIds([]);
-      setSelectedBanditPolicy(null);
     } catch (error) {
       toast.error(error.response?.data?.error || 'Failed to start blast');
     } finally {
@@ -436,21 +428,12 @@ export default function Blast() {
                   </Form.Group>
 
                   <Form.Group className="mb-3">
-                    <Form.Label>Session Selector</Form.Label>
-                    <Form.Select value={sessionName} onChange={(event) => setSessionName(event.target.value)}>
-                      <option value="Default Session">Default Session</option>
-                      {sessionOptions.map((session) => (
-                        <option key={session.id} value={session.name}>{session.name}</option>
-                      ))}
-                    </Form.Select>
-                  </Form.Group>
-
-                  <hr className="my-3" />
-
-                  <Form.Group>
-                    <BanditPolicySelector 
-                      selectedPolicy={selectedBanditPolicy}
-                      onPolicySelect={setSelectedBanditPolicy}
+                    <Form.Label>Nama Session</Form.Label>
+                    <Form.Control
+                      type="text"
+                      value={sessionName}
+                      onChange={(event) => setSessionName(event.target.value)}
+                      placeholder="Masukkan nama session..."
                     />
                   </Form.Group>
                 </>
@@ -479,13 +462,6 @@ export default function Blast() {
                         <span className="text-secondary">Delay</span>
                         <span className="fw-semibold">{delay}ms</span>
                       </div>
-                      {selectedBanditPolicy && (
-                        <div className="d-flex justify-content-between mb-3">
-                          <span className="text-secondary">🤖 Bandit Policy</span>
-                          <Badge bg="success">{selectedBanditPolicy.name}</Badge>
-                        </div>
-                      )}
-
                       <div className="p-3 rounded-3 border" style={{ background: '#ece5dd' }}>
                         <div className="rounded-3 bg-white p-3 shadow-sm" style={{ maxWidth: 420 }}>
                           {selectedTemplate?.content}

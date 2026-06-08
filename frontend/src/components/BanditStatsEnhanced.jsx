@@ -341,52 +341,6 @@ const BanditStatsEnhanced = memo(function BanditStatsEnhanced({ policyId, sessio
           )}
         </Tab>
 
-        {/* ARM COMPARISON TAB */}
-        <Tab eventKey="arms" title="🎯 Performa Strategi">
-          {policyStats && policyStats.arms && (
-            <>
-              <Row className="mb-4">
-                {Object.values(policyStats.arms || {}).map((arm) => (
-                  <Col md={6} lg={4} key={arm.arm} className="mb-3">
-                    <Card>
-                      <Card.Body>
-                        <div className="d-flex justify-content-between align-items-center mb-3">
-                          <h6 className="mb-0">{formatStrategyLabel(arm.arm)}</h6>
-                          {arm.avg_reward > 0.7 && <Badge bg="success">Top</Badge>}
-                        </div>
-                        <table className="table table-sm mb-0">
-                          <tbody>
-                            <tr>
-                              <td className="text-muted">Sent</td>
-                              <td className="text-end"><strong>{arm.sent_count}</strong></td>
-                            </tr>
-                            <tr>
-                              <td className="text-muted">Delivered</td>
-                              <td className="text-end"><strong>{arm.delivered_count}</strong></td>
-                            </tr>
-                            <tr>
-                              <td className="text-muted">Delivery Rate</td>
-                              <td className="text-end"><strong>{arm.delivery_rate}%</strong></td>
-                            </tr>
-                            <tr>
-                              <td className="text-muted">Avg Reward</td>
-                              <td className="text-end"><Badge bg="info">{arm.avg_reward}</Badge></td>
-                            </tr>
-                            <tr>
-                              <td className="text-muted">Read / Reply</td>
-                              <td className="text-end"><strong>{arm.read_count} / {arm.replied_count}</strong></td>
-                            </tr>
-                          </tbody>
-                        </table>
-                      </Card.Body>
-                    </Card>
-                  </Col>
-                ))}
-              </Row>
-            </>
-          )}
-        </Tab>
-
         {/* BREAKDOWN TAB */}
         <Tab eventKey="breakdown" title="📈 Breakdown">
           {breakdown && (

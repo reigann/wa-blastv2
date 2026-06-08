@@ -53,7 +53,8 @@ export const contactsAPI = {
   previewUpload: (formData) => api.post('/contacts/upload/preview', formData),
   importContacts: (payload) => api.post('/contacts/import', payload),
   delete: (id) => api.delete(`/contacts/${id}`),
-  deleteAll: (group) => api.delete('/contacts', { params: { group } })
+  deleteAll: (group) => api.delete('/contacts', { params: { group } }),
+  deleteBulk: (ids) => api.post('/contacts/delete-bulk', { ids })
 };
 
 export const blastAPI = {

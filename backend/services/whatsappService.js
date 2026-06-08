@@ -394,14 +394,18 @@ async function ensureWhatsAppClient(username) {
     puppeteer: {
     headless: true,
     executablePath: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+    timeout: 30000,
     args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-dev-shm-usage',
-        '--disable-accelerated-2d-canvas',
-        '--no-first-run',
-        '--no-zygote',
         '--disable-gpu',
+        '--disable-background-networking',
+        '--disable-sync',
+        '--disable-extensions',
+        '--mute-audio',
+        '--hide-scrollbars',
+        '--disable-features=site-per-process',
       ],
     },
   });

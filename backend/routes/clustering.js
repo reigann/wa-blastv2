@@ -94,12 +94,12 @@ async function getSentMapByPhones(phones = []) {
 }
 
 function mapFeatures(features = []) {
-  const allowed = new Set(['name', 'tags', 'group', 'recency', 'frequency', 'prodi']);
+  const allowed = new Set(['name', 'tags', 'group', 'recency', 'frequency', 'prodi', 'school', 'sekolah']);
   const normalized = Array.isArray(features)
     ? features.map((f) => String(f).toLowerCase()).filter((f) => allowed.has(f))
     : [];
   if (!normalized.length) return ['recency', 'frequency', 'group', 'prodi'];
-  return normalized.map((f) => (f === 'tags' ? 'prodi' : f));
+  return normalized.map((f) => (f === 'tags' ? 'prodi' : (f === 'sekolah' ? 'school' : f)));
 }
 
 function computeClusterPayload(contacts = [], sentMap = new Map()) {
@@ -281,13 +281,25 @@ router.get('/latest', async (req, res) => {
     const payload = computeClusterPayload(contacts, sentMap);
     const dominant = dominantTag(contacts);
 
+    // Enrich each contact with computed feature values for scatter plot matrix
+    const featuresUsed = Array.isArray(latest.features_used) ? latest.features_used : [];
+    const enrichedContacts = contacts.map((c) => {
+      const created = toMillis(c.created_at);
+      const recencyDays = created > 0 ? Math.max(Math.floor((Date.now() - created) / 86400000), 0) : 0;
+      const groupHash = Array.from(String(c.group_name || 'default')).reduce((s, ch) => s + ch.charCodeAt(0), 0) % 100;
+      const messageCount = Number(sentMap.get(normalizePhone(c.phone)) || 0);
+      const sekolahHash = Array.from(String(c.asal_sekolah || 'unknown')).reduce((s, ch) => s + ch.charCodeAt(0), 0) % 100;
+      const features = { recency_days: recencyDays, message_count: messageCount, group_hash: groupHash, sekolah_hash: sekolahHash };
+      return { ...c, message_count: messageCount, features };
+    });
+
     console.log('✅ Clustering latest completed successfully');
     return res.json({
       latest,
-      contacts,
+      contacts: enrichedContacts,
       stats: payload.stats,
       clusters: payload.clusters,
-      features_used: Array.isArray(latest.features_used) ? latest.features_used : [],
+      features_used: featuresUsed,
       dominant_interest: dominant,
       warning: contacts.length === 0 ? 'Cache mungkin terputus, coba refresh halaman' : null,
     });

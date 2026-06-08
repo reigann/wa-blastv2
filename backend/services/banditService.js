@@ -325,7 +325,7 @@ async function updateEventDeliveryStatus(eventId, deliveryStatus, readStatus = 0
   const mergedReplyReceived = Math.max(Number(current.reply_received) || 0, Number(replyReceived) || 0);
   const autoReward = getAutoReward(deliveryStatus, readStatus, replyReceived);
 
-  if (current.reward === null || current.reward === undefined) {
+  if ((current.reward === null || current.reward === undefined) && current.policy_id) {
     const mergedReward = getAutoReward(deliveryStatus, mergedReadStatus, mergedReplyReceived);
     await feedback(eventId, mergedReward);
   }
@@ -487,9 +487,33 @@ async function findRecentEventsByWaAlias(alias, options = {}) {
     });
 }
 
+async function createTrackingEvent(sessionId, phone) {
+  ensureFirebaseMode();
+  const eventId = await nextNumericId('bandit_events');
+  const normalizedPhone = normalizePhone(phone);
+
+  await getFirestore().collection('bandit_events').doc(String(eventId)).set({
+    policy_id: null,
+    phone: normalizedPhone || null,
+    context: {},
+    arm: 0,
+    reward: null,
+    session_id: sessionId || null,
+    delivery_status: null,
+    read_status: 0,
+    reply_received: 0,
+    auto_reward_applied: 0,
+    created_at: admin.firestore.Timestamp.now(),
+    updated_at: admin.firestore.Timestamp.now(),
+  });
+
+  return { eventId, arm: 0 };
+}
+
 module.exports = {
   createPolicy,
   recommend,
+  createTrackingEvent,
   feedback,
   listPolicies,
   listEvents,

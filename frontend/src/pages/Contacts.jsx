@@ -50,6 +50,7 @@ export default function Contacts() {
   const [selectedGroup, setSelectedGroup] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
   const [selectedIds, setSelectedIds] = useState([]);
+  const [selectAllMode, setSelectAllMode] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [editingContact, setEditingContact] = useState(null);
   const [page, setPage] = useState(1);
@@ -182,6 +183,22 @@ export default function Contacts() {
     }
   }
 
+  async function deleteSelected() {
+    const ids = selectAllMode ? filteredRows.map((c) => c.id) : selectedIds;
+    if (!ids.length) return toast.error('No contacts selected');
+    const confirmed = window.confirm(`Hapus ${ids.length} kontak terpilih?`);
+    if (!confirmed) return;
+    try {
+      await contactsAPI.deleteBulk(ids);
+      toast.success(`${ids.length} contacts deleted`);
+      setSelectedIds([]);
+      setSelectAllMode(false);
+      await Promise.all([loadContacts(), loadGroups()]);
+    } catch (error) {
+      toast.error('Delete failed');
+    }
+  }
+
   function handleCsvUpload(event) {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -249,7 +266,7 @@ export default function Contacts() {
       phone: contact.phone,
       group: contact.group_name,
       tags: contact.minat_prodi || '',
-      notes: contact.asal_sekolah || '',
+      asal_sekolah: contact.asal_sekolah || '',
     })));
 
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
@@ -378,23 +395,30 @@ export default function Contacts() {
           </Row>
 
           <Row className="g-2 mt-3">
-            <Col md={4}>
+            <Col md={3}>
               <div className="rounded-3 border bg-body-tertiary px-3 py-2 h-100">
                 <div className="text-secondary small mb-1">Total Contacts</div>
                 <div className="fs-4 fw-bold lh-1">{totalContacts}</div>
               </div>
             </Col>
-            <Col md={4}>
+            <Col md={3}>
               <div className="rounded-3 border bg-body-tertiary px-3 py-2 h-100">
                 <div className="text-secondary small mb-1">Filtered Contacts</div>
                 <div className="fs-4 fw-bold lh-1">{filteredRows.length}</div>
               </div>
             </Col>
-            <Col md={4}>
+            <Col md={3}>
               <div className="rounded-3 border bg-body-tertiary px-3 py-2 h-100">
-                <div className="text-secondary small mb-1">Selected Contacts</div>
-                <div className="fs-4 fw-bold lh-1">{selectedIds.length}</div>
+                <div className="text-secondary small mb-1">Selected{selectAllMode ? ' (ALL)' : ''}</div>
+                <div className="fs-4 fw-bold lh-1">{selectAllMode ? filteredRows.length : selectedIds.length}</div>
               </div>
+            </Col>
+            <Col md={3} className="d-flex align-items-end">
+              {(selectedIds.length > 0 || selectAllMode) && (
+                <Button variant="outline-danger" className="w-100" onClick={deleteSelected}>
+                  <i className="bi bi-trash me-2" />Hapus {selectAllMode ? filteredRows.length : selectedIds.length} Kontak
+                </Button>
+              )}
             </Col>
           </Row>
         </Card.Body>
@@ -417,24 +441,31 @@ export default function Contacts() {
               <table className="table table-hover align-middle mb-0">
                 <thead>
                   <tr>
-                    <th style={{ width: 44 }}>
-                      <Form.Check
-                        checked={pageRows.length > 0 && pageRows.every((row) => selectedIds.includes(row.id))}
-                        onChange={(event) => {
-                          if (event.target.checked) {
-                            setSelectedIds((prev) => Array.from(new Set([...prev, ...pageRows.map((item) => item.id)])));
-                          } else {
-                            setSelectedIds((prev) => prev.filter((id) => !pageRows.some((row) => row.id === id)));
-                          }
-                        }}
-                      />
-                    </th>
-                    <th>Name</th>
-                    <th>Phone</th>
-                    <th>Group</th>
-                    <th className="table-mobile-hide">Tags</th>
-                    <th>Status</th>
-                    <th style={{ width: 100 }}>Actions</th>
+                      <th style={{ width: 44 }}>
+                        <Form.Check
+                          checked={selectAllMode || (pageRows.length > 0 && pageRows.every((row) => selectedIds.includes(row.id)))}
+                          onChange={(event) => {
+                            if (event.target.checked) {
+                              if (pageRows.every((row) => selectedIds.includes(row.id))) {
+                                setSelectAllMode(true);
+                                setSelectedIds(filteredRows.map((item) => item.id));
+                              } else {
+                                setSelectedIds((prev) => Array.from(new Set([...prev, ...pageRows.map((item) => item.id)])));
+                              }
+                            } else {
+                              setSelectAllMode(false);
+                              setSelectedIds([]);
+                            }
+                          }}
+                        />
+                      </th>
+                      <th>Name</th>
+                      <th>Phone</th>
+                      <th>Group</th>
+                      <th>Asal Sekolah</th>
+                      <th>Tags</th>
+                      <th>Status</th>
+                      <th style={{ width: 100 }}>Actions</th>
                   </tr>
                 </thead>
               </table>
@@ -449,7 +480,7 @@ export default function Contacts() {
                 <tbody>
                   {spacerTop > 0 ? (
                     <tr style={{ height: spacerTop }}>
-                      <td colSpan={7} />
+                      <td colSpan={8} />
                     </tr>
                   ) : null}
 
@@ -461,9 +492,14 @@ export default function Contacts() {
                       <tr key={contact.id} style={{ height: rowHeight }}>
                         <td>
                           <Form.Check
-                            checked={selectedIds.includes(contact.id)}
+                            checked={selectAllMode || selectedIds.includes(contact.id)}
                             onChange={(event) => {
-                              if (event.target.checked) {
+                              if (selectAllMode) {
+                                setSelectAllMode(false);
+                                if (!event.target.checked) {
+                                  setSelectedIds((prev) => prev.filter((id) => id !== contact.id));
+                                }
+                              } else if (event.target.checked) {
                                 setSelectedIds((prev) => [...prev, contact.id]);
                               } else {
                                 setSelectedIds((prev) => prev.filter((id) => id !== contact.id));
@@ -491,7 +527,8 @@ export default function Contacts() {
                             {contact.group_name}
                           </span>
                         </td>
-                        <td className="table-mobile-hide text-secondary">{tagText}</td>
+                        <td className="text-secondary">{contact.asal_sekolah || '-'}</td>
+                        <td className="text-secondary">{tagText}</td>
                         <td>
                           <StatusBadge status={status} text={status} />
                         </td>
@@ -519,7 +556,7 @@ export default function Contacts() {
 
                   {spacerBottom > 0 ? (
                     <tr style={{ height: spacerBottom }}>
-                      <td colSpan={7} />
+                      <td colSpan={8} />
                     </tr>
                   ) : null}
                 </tbody>
@@ -613,8 +650,8 @@ export default function Contacts() {
             </Form.Group>
 
             <Form.Group className="mb-0">
-              <Form.Label>Notes</Form.Label>
-              <Form.Control as="textarea" rows={3} {...register('notes')} />
+              <Form.Label>Asal Sekolah</Form.Label>
+              <Form.Control {...register('notes')} placeholder="SMA Negeri 1 Jakarta" />
             </Form.Group>
 
             <div className="d-flex justify-content-end gap-2 mt-4">

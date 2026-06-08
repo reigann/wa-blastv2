@@ -120,7 +120,7 @@ router.get('/sessions/:id/logs', async (req, res) => {
 
 router.post('/start', upload.single('media'), async (req, res) => {
   const username = req.auth?.email || 'default';
-  const { name, message, contact_ids, group_name, delay_min, delay_max, template_media_path, policy_id, template_id, schedule_at, link } = req.body;
+  const { name, message, contact_ids, group_name, delay_min, delay_max, template_media_path, template_id, schedule_at, link } = req.body;
 
   let scheduledAt = null;
   if (schedule_at) {
@@ -155,7 +155,6 @@ router.post('/start', upload.single('media'), async (req, res) => {
         name: sessionName,
         message,
         template_id: template_id ? String(template_id) : null,
-        bandit_policy_id: policy_id ? Number(policy_id) : null,
         total: contacts.length,
         sent: 0,
         failed: 0,
@@ -172,7 +171,7 @@ router.post('/start', upload.single('media'), async (req, res) => {
       sessionId = session.lastID;
     }
 
-    const payloadObj = { contact_ids: ids || null, group_name: group_name || null, delay_min, delay_max, mediaPath, username, policy_id, link };
+    const payloadObj = { contact_ids: ids || null, group_name: group_name || null, delay_min, delay_max, mediaPath, username, link };
 
     if (scheduledAt) {
       if (STORAGE_PROVIDER !== 'firebase') {
@@ -186,7 +185,7 @@ router.post('/start', upload.single('media'), async (req, res) => {
       return res.json({ success: true, queued: true, sessionId, total: contacts.length });
     }
 
-    startBlast(sessionId, contacts, message, delay_min, delay_max, mediaPath, username, policy_id, link).catch(console.error);
+    startBlast(sessionId, contacts, message, delay_min, delay_max, mediaPath, username, link).catch(console.error);
     return res.json({ success: true, sessionId, total: contacts.length, hasMedia: !!mediaPath });
   } catch (err) {
     return res.status(500).json({ error: err.message });

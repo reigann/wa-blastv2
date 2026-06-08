@@ -1,6 +1,6 @@
 const db = require('../db/database');
 const fs = require('fs');
-const { roomForUser, sendMessage, sendMessageWithMedia, normalizePhone, registerSentBanditEvent } = require('./whatsappService');
+const { roomForUser, sendMessage, sendMessageWithMedia, registerSentBanditEvent, normalizePhone } = require('./whatsappService');
 const banditService = require('./banditService');
 const { admin, getFirestore } = require('./firebaseAdmin');
 const STORAGE_PROVIDER = (process.env.STORAGE_PROVIDER || 'firebase').toLowerCase();
@@ -114,7 +114,7 @@ function processTemplate(message, contact) {
   return output;
 }
 
-async function startBlast(sessionId, contacts, message, delayMin, delayMax, mediaPath = null, username = 'default', policyId = null, link = null) {
+async function startBlast(sessionId, contacts, message, delayMin, delayMax, mediaPath = null, username = 'default', link = null) {
   if (activeBlasts.get(username)) {
     throw new Error('A blast is already in progress');
   }
@@ -152,35 +152,19 @@ async function startBlast(sessionId, contacts, message, delayMin, delayMax, medi
       personalizedMessage += `\n\n${link}`;
     }
     
+    // Create tracking event for auto read/reply detection
+    let banditEventId = null;
+    try {
+      const normPhone = normalizePhone(contact.phone);
+      const tracking = await banditService.createTrackingEvent(sessionId, normPhone);
+      banditEventId = tracking.eventId;
+    } catch (err) {
+      console.error('Failed to create tracking event:', err?.message || err);
+    }
+
     let retries = 0;
     let messageSent = false;
     let lastError = null;
-
-    // Prepare optional bandit recommendation (non-blocking if disabled)
-    let banditEventId = null;
-    if (process.env.BANDIT_ENABLED === 'true' && policyId) {
-      try {
-        // build simple context from contact
-        const createdDate = new Date(contact.created_at);
-        const recencyDays = Math.max(Math.floor((Date.now() - createdDate.getTime()) / (1000 * 60 * 60 * 24)), 0);
-        const sentCountRow = db.prepare(`SELECT COUNT(*) AS total_sent FROM blast_logs WHERE phone = ? AND status = 'sent'`).get(contact.phone);
-        const message_count = Number(sentCountRow?.total_sent || 0);
-        const context = {
-          recency_days: recencyDays,
-          message_count,
-          cluster_id: contact.cluster_id >= 0 ? contact.cluster_id : -1,
-          hour: new Date().getHours(),
-          day: new Date().getDay()
-        };
-
-        const normPhone = normalizePhone(contact.phone);
-        const rec = await banditService.recommend(policyId, context, sessionId, normPhone);
-        banditEventId = rec.eventId;
-        emitToUser(username, 'bandit:recommend', { sessionId, phone: normPhone, arm: rec.arm, eventId: banditEventId });
-      } catch (err) {
-        console.error('Bandit recommend failed:', err?.message || err);
-      }
-    }
 
     // Retry logic for timeout/unstable connection
     while (retries <= MAX_RETRIES && !messageSent) {
@@ -205,8 +189,8 @@ async function startBlast(sessionId, contacts, message, delayMin, delayMax, medi
           sent_at: logTime,
         });
 
-        // Auto-apply reward for bandit: message was successfully sent
-        if (banditEventId) {
+        // Register WA message mapping for auto read/reply tracking
+        if (banditEventId && waMessage) {
           try {
             registerSentBanditEvent(waMessage, banditEventId, contact.phone);
             const waAliases = [
@@ -220,13 +204,6 @@ async function startBlast(sessionId, contacts, message, delayMin, delayMax, medi
           } catch (mapErr) {
             console.warn('Failed to register sent message mapping:', mapErr?.message);
           }
-          try {
-            // Try to auto-reward with 'sent' status (0.5 base reward + bonuses if applicable)
-            await banditService.updateEventDeliveryStatus(banditEventId, 'sent', 0, 0);
-          } catch (err) {
-            console.warn('Failed to auto-reward bandit event:', err?.message);
-          }
-          emitToUser(username, 'bandit:event', { eventId: banditEventId, phone: contact.phone });
         }
 
         emitToUser(username, 'blast:progress', {
@@ -283,15 +260,6 @@ async function startBlast(sessionId, contacts, message, delayMin, delayMax, medi
           error_message: err.message,
           sent_at: failedLogTime,
         });
-
-        // Auto-apply penalty reward for bandit: message failed
-        if (banditEventId) {
-          try {
-            await banditService.updateEventDeliveryStatus(banditEventId, 'failed', 0, 0);
-          } catch (errBandit) {
-            console.warn('Failed to record bandit penalty:', errBandit?.message);
-          }
-        }
 
         emitToUser(username, 'blast:progress', {
           sessionId,

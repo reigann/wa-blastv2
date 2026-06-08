@@ -7,6 +7,12 @@ const { admin, getFirestore } = require('../services/firebaseAdmin');
 
 const upload = multer({ dest: 'uploads/' });
 
+function chunkArray(items, size) {
+  const out = [];
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  return out;
+}
+
 function normalizePhone(raw) {
   let phone = String(raw || '').trim().replace(/[^\d+]/g, '');
   if (phone && !phone.startsWith('+') && phone.length > 8) phone = '+' + phone;
@@ -240,38 +246,51 @@ router.post('/import', express.json(), async (req, res) => {
   const { rows, group_name } = req.body;
   if (!rows || !Array.isArray(rows) || !rows.length) return res.status(400).json({ error: 'No rows provided for import' });
 
-  let imported = 0;
-  let skipped = 0;
-
   try {
     const db = getFirestore();
-    for (const c of rows) {
-      const phone = normalizePhone(c.phone);
-      if (!phone) {
-        skipped++;
-        continue;
-      }
-      const existing = await findByPhone(phone);
-      if (existing) {
-        skipped++;
-        continue;
-      }
 
-      const now = admin.firestore.Timestamp.now();
-      await db.collection('contacts').add({
-        name: (c.name || `Contact_${phone.slice(-4)}`).toString().trim(),
-        phone,
-        group_name: group_name || 'default',
-        minat_prodi: (c.minat_prodi || 'Teknik Informatika').toString().trim(),
-        asal_sekolah: (c.asal_sekolah || 'unknown').toString().trim(),
-        cluster_id: -1,
-        created_at: now,
-        updated_at: now,
-      });
-      imported++;
+    // 1. Normalize all phones
+    const entries = rows.map((c) => ({
+      name: (c.name || '').toString().trim(),
+      phone: normalizePhone(c.phone),
+      minat_prodi: (c.minat_prodi || 'Teknik Informatika').toString().trim(),
+      asal_sekolah: (c.asal_sekolah || 'unknown').toString().trim(),
+    })).filter((e) => e.phone);
+
+    // 2. Batch-check existing phones (Firestore 'in' max 10 per query)
+    const existingPhones = new Set();
+    const phoneChunks = chunkArray(entries.map((e) => e.phone), 10);
+    for (const chunk of phoneChunks) {
+      const snap = await db.collection('contacts').where('phone', 'in', chunk).select('phone').get();
+      snap.docs.forEach((d) => existingPhones.add(d.data().phone));
     }
 
-    res.json({ success: true, imported, skipped, total: rows.length });
+    const toAdd = entries.filter((e) => !existingPhones.has(e.phone));
+    const imported = toAdd.length;
+    const skipped = entries.length - imported;
+
+    // 3. Batch write all new contacts
+    const now = admin.firestore.Timestamp.now();
+    const writeChunks = chunkArray(toAdd, 500);
+    for (const chunk of writeChunks) {
+      const batch = db.batch();
+      chunk.forEach((e) => {
+        const ref = db.collection('contacts').doc();
+        batch.set(ref, {
+          name: e.name || `Contact_${e.phone.slice(-4)}`,
+          phone: e.phone,
+          group_name: group_name || 'default',
+          minat_prodi: e.minat_prodi,
+          asal_sekolah: e.asal_sekolah,
+          cluster_id: -1,
+          created_at: now,
+          updated_at: now,
+        });
+      });
+      await batch.commit();
+    }
+
+    res.json({ success: true, imported, skipped, total: entries.length });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -282,6 +301,23 @@ router.delete('/:id', async (req, res) => {
     const db = getFirestore();
     await db.collection('contacts').doc(req.params.id).delete();
     res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/delete-bulk', express.json(), async (req, res) => {
+  const { ids } = req.body || {};
+  if (!Array.isArray(ids) || !ids.length) return res.status(400).json({ error: 'ids array required' });
+  try {
+    const db = getFirestore();
+    const chunks = chunkArray(ids, 500);
+    for (const chunk of chunks) {
+      const batch = db.batch();
+      chunk.forEach((id) => batch.delete(db.collection('contacts').doc(String(id))));
+      await batch.commit();
+    }
+    res.json({ success: true, deleted: ids.length });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
