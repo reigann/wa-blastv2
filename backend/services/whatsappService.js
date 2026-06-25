@@ -392,8 +392,8 @@ async function ensureWhatsAppClient(username) {
   const client = new Client({
     authStrategy: new LocalAuth({ clientId: `wa-${sanitizeClientId(username)}` }),
     puppeteer: {
-    headless: true,
-    executablePath: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+    headless: process.env.WA_HEADLESS !== 'false',
+    ...(process.env.WA_CHROME_PATH ? { executablePath: process.env.WA_CHROME_PATH } : {}),
     timeout: 30000,
     args: [
         '--no-sandbox',
